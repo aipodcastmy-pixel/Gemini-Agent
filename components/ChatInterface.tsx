@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ChatMessage, SendMessagePayload } from '../types';
 import Message from './Message';
-import { SendIcon, BotIcon, PaperclipIcon, XIcon, SettingsIcon } from './Icons';
+import { SendIcon, BotIcon, PaperclipIcon, XIcon, SettingsIcon, PlusSquareIcon } from './Icons';
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -9,11 +9,12 @@ interface ChatInterfaceProps {
   isLoading: boolean;
   agentActivity: string | null;
   commandHistory: string[];
+  onNewTaskClick: () => void;
   onSettingsClick: () => void;
   isChatDisabled: boolean;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, isLoading, agentActivity, commandHistory, onSettingsClick, isChatDisabled }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, isLoading, agentActivity, commandHistory, onNewTaskClick, onSettingsClick, isChatDisabled }) => {
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -124,9 +125,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
             <BotIcon />
             <span>AI Agent</span>
         </h2>
-        <button onClick={onSettingsClick} className="text-slate-400 hover:text-white transition-colors">
-            <SettingsIcon />
-        </button>
+        <div className="flex items-center gap-2">
+            <button onClick={onNewTaskClick} className="text-slate-400 hover:text-white transition-colors" title="New Task">
+                <PlusSquareIcon />
+            </button>
+            <button onClick={onSettingsClick} className="text-slate-400 hover:text-white transition-colors" title="Settings">
+                <SettingsIcon />
+            </button>
+        </div>
       </div>
       <div className="flex-grow p-4 overflow-y-auto">
         {messages.length === 0 && (
