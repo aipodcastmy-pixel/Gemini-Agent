@@ -1,3 +1,5 @@
+
+
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, SendMessagePayload } from '../types';
 import Message from './Message';
@@ -40,8 +42,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     }
   }, [input]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // FIX: Refactored message sending logic to improve type safety and remove an `any` cast.
+  const sendMessage = () => {
     if ((input.trim() || images.length > 0) && !isLoading) {
       onSendMessage({ text: input.trim(), images });
       setInput('');
@@ -49,10 +51,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     }
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendMessage();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files);
-      const imagePromises = files.map(file => {
+      // FIX: Explicitly type `file` as `File` to fix a type error where it was inferred as 'unknown'.
+      const imagePromises = files.map((file: File) => {
         return new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result as string);
@@ -73,7 +81,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as any);
+      sendMessage();
       return;
     }
 
@@ -170,7 +178,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
                 placeholder="Ask the agent to do something..."
                 className="flex-grow bg-transparent resize-none focus:outline-none text-slate-100 placeholder-slate-400 max-h-[200px] text-sm px-1"
                 rows={1}
-                disabled={isLoading}
             />
             <button
                 type="submit"

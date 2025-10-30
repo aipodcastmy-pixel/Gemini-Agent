@@ -1,65 +1,66 @@
 # Gemini AI Agent Chatbox
 
-## 1. 目标与原则 (Goals & Principles)
+## 1. Goals & Principles
 
-这是一个高级的AI代理聊天机器人项目，其核心原则是：
+This is an advanced AI agent chatbot project built on the following core principles:
 
-*   **工具优先 (Tool-first)**: AI大语言模型（LLM）主要负责决策、规划和解释，而所有事实的获取和具体操作都交给专门的工具来执行。
-*   **零硬编码 (Zero Hard-coding)**: 代理本身不应内置任何关于特定任务的硬编码逻辑（例如SQL模板、API路径等）。所有的行为都应该由它在运行时通过工具获取的“证据”来驱动。
-*   **可解释性 (Explainable)**: 代理的每一步操作都应该有清晰、结构化的记录，方便调试和理解其“思考”过程。
+*   **Tool-first**: The AI Large Language Model (LLM) is primarily responsible for decision-making, planning, and interpretation, while all fact-finding and concrete operations are delegated to specialized tools.
+*   **Zero Hard-coding**: The agent should not have any hard-coded logic for specific tasks (e.g., SQL templates, API paths). All its actions should be driven by "evidence" it gathers at runtime using its tools.
+*   **Explainable**: Every step the agent takes should be clearly and structurally logged, making it easy to debug and understand its "thought" process.
 
-## 2. 功能特性 (Features)
+## 2. Features
 
-*   **交互式聊天界面**: 一个流畅、美观的聊天窗口。
-*   **Gemini AI 代理**: 由 Google 最新的 `gemini-2.5-pro` 模型驱动。
-*   **强大的工具集**:
-    *   **网页搜索 (`googleSearch`)**: 实时访问互联网信息。
-    *   **网页阅读 (`readUrl`)**: 提取并理解网页内容。
-    *   **虚拟文件系统**: 可以在浏览器环境中创建、读取、写入和列出文件 (`writeFile`, `readFile`, `listFiles`)。
-    *   **代码执行器 (`runJavascript`)**: 在沙箱环境中执行 JavaScript 代码，用于计算、数据处理等。
-*   **集成开发环境 (IDE-like Interface)**:
-    *   侧边栏提供文件浏览器和代码编辑器。
-    *   可以直接在UI中创建、查看和保存文件。
-*   **实时状态反馈**: 明确显示代理当前正在执行的任务（例如：“思考中...”、“正在搜索网页...”）。
-*   **命令历史**: 在输入框中按“上/下”箭头键可以快速调用之前发送过的命令。
-*   **Markdown 渲染**: 代理的回复会以格式化的 Markdown 形式呈现，提高可读性。
+*   **Interactive Chat Interface**: A smooth and aesthetically pleasing chat window.
+*   **Non-blocking UI**: Continue typing your next message while the agent is processing the current one.
+*   **Gemini AI Agent**: Powered by Google's latest `gemini-2.5-pro` model.
+*   **Powerful Toolset**:
+    *   **Web Search (`googleSearch`)**: Real-time access to internet information.
+    *   **Web Page Reading (`readUrl`)**: Extracts and understands content from web pages.
+    *   **Local File System Integration**: Create, read, write, and list files from a user-selected folder on your local machine (`writeFile`, `readFile`, `listFiles`). (Requires a modern browser like Chrome or Edge).
+    *   **Code Executor (`runJavascript`)**: Executes JavaScript code in a sandboxed environment for calculations, data processing, etc.
+*   **IDE-like Interface**:
+    *   Side panel with a file explorer and code editor.
+    *   **Load a local folder** to manage its contents.
+    *   Create, view, and save files directly within the UI, with changes reflected on your local disk.
+*   **Real-time Status Feedback**: Clearly displays the agent's current task (e.g., "Thinking...", "Searching the web...").
+*   **Command History**: Use the up/down arrow keys in the input box to quickly cycle through previously sent commands.
+*   **Markdown Rendering**: The agent's responses are rendered as formatted Markdown for improved readability.
 
-## 3. Agent 状态逻辑说明 (Agent Status Logic)
+## 3. Agent Core Logic: Plan-Execute-Check
 
-这是当前代理运行的核心逻辑，它是一个基于工具调用的循环状态机。
+The agent operates on a sophisticated event-driven loop, functioning as a planner and an executor to solve user requests. Every decision is explainable and based on evidence gathered from its tools.
 
-1.  **接收输入 (Input Reception)**
-    *   应用接收用户的输入，并将其封装成用户消息。
-    *   UI 状态更新为 `isLoading = true`，并显示初始活动状态，如 `agentActivity = '思考中...'`。
+1.  **Parse Intent**
+    *   When the user sends a message, the agent's first step is to parse the user's intent, identify their primary goal, and note any constraints or preferences.
 
-2.  **发送至模型 (Send to Model)**
-    *   将用户的消息发送给 Gemini 模型。
+2.  **Reconcile Goals & Plan**
+    *   The agent updates its current goal. If the new request conflicts with a previous one, it may ask clarifying questions.
+    *   It then formulates a **Task Graph**: a step-by-step plan to achieve the goal. This involves creating, deleting, or reordering a to-do list of actions and identifying dependencies between them.
 
-3.  **模型决策 (Model Decision)**
-    *   模型会返回一个响应。这个响应有两种可能：
-        a. **最终回复**: 一个纯文本的回答。
-        b. **工具调用请求**: 一个或多个函数调用请求（`functionCalls`），其中可能包含内置的 `googleSearch` 或我们定义的自定义工具。
+3.  **Select Next Move**
+    *   From the list of currently executable tasks in its plan, the agent selects the next move based on factors like potential value, risk, and dependencies.
 
-4.  **工具执行循环 (Tool Execution Loop)**
-    *   如果模型返回的是**工具调用请求**，应用将进入此循环：
-        *   遍历所有 `functionCalls`。
-        *   **更新UI状态**: 根据当前执行的工具名称，更新 `agentActivity` 状态（例如，`'正在搜索网页...'` 或 `'正在使用工具: readFile...'`）。
-        *   **执行工具**:
-            *   如果是 `googleSearch`，应用不会在本地执行任何操作，而是准备一个确认信息，表示搜索结果已对模型可用。
-            *   如果是自定义工具（如 `readFile`, `readUrl` 等），应用会调用前端对应的`executeTool`函数，并等待其返回结果。
-        *   **收集结果**: 将所有工具的执行结果（或确认信息）收集到一个数组中。
-        *   **结果发回模型**: 将这个包含所有工具结果的数组作为新的消息发送回 Gemini 模型。
-        *   **循环继续**: 程序返回到第3步，等待模型的下一个决策。模型可能会根据工具结果决定调用更多工具，或给出最终回复。
+4.  **Execute**
+    *   The application executes the selected move by calling the appropriate tool (e.g., `googleSearch`, `readFile`).
+    *   The result from the tool is considered "evidence" and is sent back to the agent.
 
-5.  **生成最终回复 (Final Response Generation)**
-    *   如果模型在第3步返回的是**最终回复**（即 `functionCalls` 为空），则工具执行循环结束。
-    *   应用将模型的文本回复格式化为代理消息。
-    *   UI 状态更新为 `isLoading = false`，`agentActivity` 设为 `null`。
+5.  **Check & Adapt**
+    *   The agent runs an internal "assertion" to check if the evidence brings it closer to its goal.
+        *   **On Success**: If the step was successful, it proceeds to the next step in its plan.
+        *   **On Failure**: If the tool returned an error, the agent generates a "fine-tuning strategy." It adapts its plan by finding an alternative route—for example, if `readUrl` fails, it might try `googleSearch` to find a different article. It does not give up.
 
-6.  **错误处理 (Error Handling)**
-    *   在整个过程中的任何一步如果发生异常，`try...catch` 块会捕获错误。
-    *   应用会向用户显示一条通用的错误消息，并**在开发者控制台打印详细的调试报告**，包括错误发生时的用户输入和完整的对话历史。
+6.  **Stop or Continue**
+    *   If all success criteria for the main goal are met, the agent will provide a final, comprehensive answer to the user.
+    *   Otherwise, it returns to step 3 to select the next move in its revised plan.
 
----
+This entire process is logged, making every decision (why a specific tool was chosen, what evidence was used) fully transparent and debuggable.
 
-这个 `README.md` 文件将作为我们项目的核心文档，我会随着功能的迭代不断更新它。
+## 4. Dynamic Update Strategy
+
+The agent is designed to handle situations where the user changes their mind or adds new requirements mid-task.
+
+*   **Hard Pivot**: When the user's new request completely replaces the old one (e.g., "Never mind the summary, can you write a function to sort an array instead?"), the agent is instructed to discard its old plan and create a new one from scratch for the new goal.
+
+*   **Soft Merge**: When the user adds a related sub-task or constraint (e.g., "While you're writing the code, please add comments explaining each line."), the agent will intelligently merge the new requirement into its existing plan without starting over. It will determine the most logical point to perform the new action.
+
+This allows for a more natural and flexible conversational flow, where the agent can adapt to evolving user needs.

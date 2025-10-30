@@ -5,7 +5,7 @@ import CodeEditor from './components/CodeEditor';
 import FileExplorer from './components/FileExplorer';
 import { useFileSystem } from './hooks/useFileSystem';
 import { ChatMessage, MessageAuthor, SendMessagePayload } from './types';
-import { SYSTEM_INSTRUCTION, listFilesTool, readFileTool, runJavascriptTool, writeFileTool, readUrlTool } from './constants';
+import { SYSTEM_INSTRUCTION, customTools } from './constants';
 
 const Resizer: React.FC<{ onMouseDown: (event: React.MouseEvent) => void }> = ({ onMouseDown }) => (
     <div
@@ -34,9 +34,17 @@ const App: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
 
 
-    const { files, listFiles, readFile, writeFile, getFileContent, setFiles } = useFileSystem([
-        { name: 'instructions.txt', content: 'Welcome! Ask the AI to read this file.'}
-    ]);
+    const { 
+        files, 
+        listFiles, 
+        readFile, 
+        writeFile, 
+        getFileContent,
+        loadFolder,
+        isFolderLoaded,
+        fsError,
+        isApiSupported,
+    } = useFileSystem();
 
     const chatRef = useRef<Chat | null>(null);
 
@@ -46,12 +54,11 @@ const App: React.FC = () => {
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 author: MessageAuthor.AGENT,
-                text: "错误：API_KEY 未配置。请设置环境变量。",
+                text: "ERROR: API_KEY is not configured. Please set the environment variable.",
             }]);
             return;
         }
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const customTools: FunctionDeclaration[] = [listFilesTool, readFileTool, writeFileTool, runJavascriptTool, readUrlTool];
         
         chatRef.current = ai.chats.create({
             model: 'gemini-2.5-pro',
@@ -120,18 +127,18 @@ const App: React.FC = () => {
             return stringResult === undefined ? 'undefined' : stringResult;
         } catch (e) {
             const error = e as Error;
-            return `错误: ${error.message}`;
+            return `Error: ${error.message}`;
         }
     };
     
     const readUrl = async (url: string): Promise<string> => {
         try {
-            setAgentActivity(`正在读取 ${url} 的内容...`);
+            setAgentActivity(`Reading content from ${url}...`);
             const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
             const response = await fetch(proxyUrl);
             
             if (!response.ok) {
-                return `错误：无法获取 URL。服务器响应状态为 ${response.status}。网站可能已关闭或阻止访问。`;
+                return `Error: Failed to fetch URL. Server responded with status ${response.status}. The website might be down or blocking access.`;
             }
     
             const htmlContent = await response.text();
@@ -146,45 +153,56 @@ const App: React.FC = () => {
             mainContent = mainContent.replace(/(\r\n|\n|\r)/gm, " ").replace(/\s\s+/g, ' ').trim();
             
             if (!mainContent) {
-                return `错误：无法从 URL 提取任何可读内容。它可能是视频、图像或严重依赖 JavaScript 的页面。`;
+                return `Error: Could not extract any readable content from the URL. It might be a video, an image, or a page that relies heavily on JavaScript.`;
             }
             
             const summary = mainContent.substring(0, 4000) + (mainContent.length > 4000 ? '...' : '');
-            return `成功从 ${url} 提取内容：\n\n${summary}`;
+            return `Successfully extracted content from ${url}:\n\n${summary}`;
     
+        // FIX: Corrected the catch block syntax. The typo `_message` was replaced with `{` to form a valid catch block.
         } catch (e) {
             const error = e as Error;
-            console.error(`获取 URL ${url} 时出错:`, error);
-            return `错误：尝试获取 URL 内容时发生异常。消息: ${error.message}`;
+            console.error(`Error fetching URL ${url}:`, error);
+            return `Error: An exception occurred while trying to fetch the URL content. Message: ${error.message}`;
         }
     };
 
     const handleFileSelect = async (fileName: string) => {
         setActiveFile(fileName);
-        const content = await getFileContent(fileName);
-        setEditorContent(content || '');
+        try {
+            const content = await getFileContent(fileName);
+            setEditorContent(content);
+        } catch (e) {
+            console.error("Error reading file content:", e);
+            setEditorContent("Error: could not read this file.");
+        }
     };
     
     const handleSaveFile = async (fileName: string, content: string) => {
         await writeFile(fileName, content);
-        setEditorContent(content);
+        setEditorContent(content); // Optimistic update
         setMessages(prev => [...prev, {
             id: Date.now().toString(),
             author: MessageAuthor.TOOL,
-            text: `文件 '${fileName}' 已保存。`,
+            text: `File '${fileName}' has been saved to your local disk.`,
             toolName: 'editor',
             toolArgs: { fileName },
-            toolResult: '保存成功'
+            toolResult: 'Save successful'
         }]);
     };
 
-    const handleNewFile = () => {
-        const fileName = prompt("输入新文件名:");
+    const handleNewFile = async () => {
+        if (!isFolderLoaded) {
+            alert("Please load a folder first before creating a new file.");
+            return;
+        }
+        const fileName = prompt("Enter new file name:");
         if (fileName && !files.includes(fileName)) {
-            writeFile(fileName, '');
-            handleFileSelect(fileName);
+            await writeFile(fileName, ''); // This will also refresh the file list
+            setActiveFile(fileName);
+            setEditorContent('');
         } else if (fileName) {
-            alert("同名文件已存在。");
+            alert("A file with the same name already exists.");
         }
     };
     
@@ -205,7 +223,7 @@ const App: React.FC = () => {
             case 'readUrl':
                 return await readUrl(args.url);
             default:
-                return `未知工具: ${name}`;
+                return `Unknown tool: ${name}`;
         }
     }
 
@@ -220,7 +238,7 @@ const App: React.FC = () => {
         }
 
         setIsLoading(true);
-        setAgentActivity('思考中...');
+        setAgentActivity('Thinking...');
         const userMessage: ChatMessage = { 
             id: Date.now().toString(), 
             author: MessageAuthor.USER, 
@@ -232,9 +250,9 @@ const App: React.FC = () => {
         setTimeout(() => {
             const processRequest = async () => {
                 try {
-                    console.groupCollapsed(`处理用户输入: "${payload.text}"`);
-                    console.log("当前会话历史:", messages);
-                    if (!chatRef.current) throw new Error("聊天未初始化");
+                    console.groupCollapsed(`Processing user input: "${payload.text}"`);
+                    console.log("Current chat history:", messages);
+                    if (!chatRef.current) throw new Error("Chat not initialized");
 
                     const messageParts: Part[] = [];
                     if (payload.text) {
@@ -251,36 +269,36 @@ const App: React.FC = () => {
                     while (true) {
                         const functionCalls = currentResponse.functionCalls;
                         if (!functionCalls || functionCalls.length === 0) {
-                            console.log("模型返回最终文本，无工具调用。");
+                            console.log("Model returned final text, no tool calls.");
                             break;
                         }
                         
-                        console.log("模型请求工具调用:", functionCalls);
+                        console.log("Model requested tool calls:", functionCalls);
 
                         const functionResponseParts: any[] = [];
                         const toolMessages: ChatMessage[] = [];
 
                         for (const call of functionCalls) {
                             const activityText = call.name === 'googleSearch' 
-                                ? '正在搜索网页...' 
-                                : `正在使用工具: ${call.name}...`;
+                                ? 'Searching the web...' 
+                                : `Using tool: ${call.name}...`;
                             setAgentActivity(activityText);
 
                             let result;
                             if (call.name === 'googleSearch') {
-                                result = "好的，搜索结果可供模型使用。";
-                                console.log("确认 googleSearch。");
+                                result = "OK, search results are available to the model.";
+                                console.log("Acknowledging googleSearch.");
                             } else {
-                                console.log(`执行自定义工具: ${call.name}`, call.args);
+                                console.log(`Executing custom tool: ${call.name}`, call.args);
                                 toolMessages.push({
                                     id: `${Date.now()}-${call.name}`,
                                     author: MessageAuthor.TOOL,
-                                    text: `正在执行工具 ${call.name}...`,
+                                    text: `Executing tool ${call.name}...`,
                                     toolName: call.name,
                                     toolArgs: call.args
                                 });
                                 result = await executeTool(call.name, call.args);
-                                console.log(`工具 ${call.name} 结果:`, result);
+                                console.log(`Tool ${call.name} result:`, result);
                             }
                             
                             functionResponseParts.push({
@@ -292,25 +310,25 @@ const App: React.FC = () => {
                             setMessages(prev => [...prev, ...toolMessages]);
                         }
 
-                        setAgentActivity('正在处理工具结果...');
-                        console.log("将工具响应发送回模型:", functionResponseParts);
+                        setAgentActivity('Processing tool results...');
+                        console.log("Sending tool responses back to model:", functionResponseParts);
                         currentResponse = await chatRef.current.sendMessage({ message: functionResponseParts });
                     }
 
-                    const finalText = currentResponse?.text ?? "抱歉，我无法处理该请求。";
-                    console.log("最终代理响应:", finalText);
+                    const finalText = currentResponse?.text ?? "Sorry, I could not process that request.";
+                    console.log("Final agent response:", finalText);
                     const agentMessage: ChatMessage = { id: Date.now().toString() + '-agent', author: MessageAuthor.AGENT, text: finalText };
                     setMessages(prev => [...prev, agentMessage]);
 
                 } catch (error) {
-                    console.error("对话期间出错:", error);
-                    console.groupCollapsed("错误详情");
-                    console.log("最后的用户输入:", payload);
-                    console.log("出错时的会话历史:", messages);
-                    console.error("原始错误对象:", error);
+                    console.error("Error during conversation:", error);
+                    console.groupCollapsed("Error details");
+                    console.log("Last user input:", payload);
+                    console.log("Chat history at time of error:", messages);
+                    console.error("Original error object:", error);
                     console.groupEnd();
 
-                    const errorMessage: ChatMessage = { id: Date.now().toString() + '-error', author: MessageAuthor.AGENT, text: "发生错误。请检查开发者控制台以获取详细信息。" };
+                    const errorMessage: ChatMessage = { id: Date.now().toString() + '-error', author: MessageAuthor.AGENT, text: "An error occurred. Please check the developer console for details." };
                     setMessages(prev => [...prev, errorMessage]);
                 } finally {
                     setIsLoading(false);
@@ -325,7 +343,16 @@ const App: React.FC = () => {
     return (
         <div className="h-screen w-screen p-4 flex bg-slate-900 font-sans" ref={containerRef}>
             <div style={{ flex: `0 0 ${panelSizes[0]}%` }} className="h-full min-w-0">
-                <FileExplorer files={files} activeFile={activeFile} onFileSelect={handleFileSelect} onNewFile={handleNewFile} />
+                <FileExplorer 
+                    files={files} 
+                    activeFile={activeFile} 
+                    onFileSelect={handleFileSelect} 
+                    onNewFile={handleNewFile}
+                    onLoadFolder={loadFolder}
+                    isFolderLoaded={isFolderLoaded}
+                    isApiSupported={isApiSupported}
+                    fsError={fsError}
+                />
             </div>
             <Resizer onMouseDown={() => handleMouseDown(0)} />
             <div style={{ flex: `0 0 ${panelSizes[1]}%` }} className="h-full min-w-0">
