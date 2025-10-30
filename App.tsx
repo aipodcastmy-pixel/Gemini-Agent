@@ -1,10 +1,10 @@
-import { GoogleGenAI, Chat, FunctionDeclaration, Part } from '@google/genai';
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { GoogleGenAI, Chat, Part } from '@google/genai';
+import React, { useState, useRef, useEffect } from 'react';
 import ChatInterface from './components/ChatInterface';
 import CodeEditor from './components/CodeEditor';
 import FileExplorer from './components/FileExplorer';
 import { useFileSystem } from './hooks/useFileSystem';
-import { ChatMessage, MessageAuthor, SendMessagePayload } from './types';
+import { ChatMessage, MessageAuthor, SendMessagePayload, ToolMessage } from './types';
 import { SYSTEM_INSTRUCTION, customTools } from './constants';
 import { useLlm } from './hooks/useLlm';
 import SettingsModal from './components/SettingsModal';
@@ -63,8 +63,6 @@ const App: React.FC = () => {
     };
 
     useEffect(() => {
-        // This effect is the single source of truth for initializing and re-initializing the chat.
-        // It runs on mount and whenever the systemInstruction state or the Gemini-specific config changes.
         if (llmConfig.provider !== 'gemini') {
             chatRef.current = null;
             return;
@@ -96,29 +94,30 @@ const App: React.FC = () => {
             if (draggingIndex === null || !containerRef.current) return;
             
             const containerWidth = containerRef.current.offsetWidth;
-            const dxPercentage = (e.movementX / containerWidth) * 100;
-    
-            setPanelSizes(prevSizes => {
-                const newSizes = [...prevSizes];
-                const leftPanelIndex = draggingIndex;
-                const rightPanelIndex = draggingIndex + 1;
-                
-                const totalSize = newSizes[leftPanelIndex] + newSizes[rightPanelIndex];
-                let newLeftSize = newSizes[leftPanelIndex] + dxPercentage;
-                
-                // Set a minimum width of 200px for the panels being resized.
-                const minPanelPixels = 200;
-                const minPanelPercentage = (minPanelPixels / containerWidth) * 100;
+            const minPanelPixels = 200;
+            
+            const newSizes = [...panelSizes];
+            const leftPanelIndex = draggingIndex;
+            const rightPanelIndex = draggingIndex + 1;
 
-                newLeftSize = Math.max(minPanelPercentage, Math.min(newLeftSize, totalSize - minPanelPercentage));
+            const leftPanel = containerRef.current.children[leftPanelIndex * 2];
+            const rightPanel = containerRef.current.children[rightPanelIndex * 2];
+
+            if (!leftPanel || !rightPanel) return;
+
+            const combinedWidth = leftPanel.clientWidth + rightPanel.clientWidth;
+            let newLeftWidth = e.clientX - leftPanel.getBoundingClientRect().left;
+
+            newLeftWidth = Math.max(minPanelPixels, Math.min(newLeftWidth, combinedWidth - minPanelPixels));
+            
+            const newLeftSize = (newLeftWidth / containerWidth) * 100;
+            const combinedSize = panelSizes[leftPanelIndex] + panelSizes[rightPanelIndex];
+            const newRightSize = combinedSize - newLeftSize;
+
+            newSizes[leftPanelIndex] = newLeftSize;
+            newSizes[rightPanelIndex] = newRightSize;
     
-                const newRightSize = totalSize - newLeftSize;
-                
-                newSizes[leftPanelIndex] = newLeftSize;
-                newSizes[rightPanelIndex] = newRightSize;
-    
-                return newSizes;
-            });
+            setPanelSizes(newSizes);
         };
     
         const handleMouseUp = () => {
@@ -136,7 +135,7 @@ const App: React.FC = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [draggingIndex]);
+    }, [draggingIndex, panelSizes]);
 
     const handleMouseDown = (index: number) => {
         setDraggingIndex(index);
@@ -300,7 +299,6 @@ const App: React.FC = () => {
 
     const indexedDBWrite = async (key: string, value: string): Promise<string> => {
         try {
-            // The agent will pass a string, we need to parse it back to an object if possible
             let parsedValue;
             try {
                 parsedValue = JSON.parse(value);
@@ -313,7 +311,7 @@ const App: React.FC = () => {
         }
     };
 
-    const executeTool = async (name: string, args: any) => {
+    const executeTool = async (name: string, args: any): Promise<string> => {
         switch (name) {
             case 'listFiles':
                 return await listFiles();
@@ -403,15 +401,15 @@ const App: React.FC = () => {
                         console.log("Model requested tool calls:", functionCalls);
 
                         // 1. Show all tool-in-progress messages at once for better UX
-                        const toolMessages: ChatMessage[] = functionCalls.map(call => ({
-                            id: `${Date.now()}-${call.name}-${Math.random()}`, // Add random to ensure unique key
+                        const toolMessages: ToolMessage[] = functionCalls.map(call => ({
+                            id: `${Date.now()}-${call.name}-${Math.random()}`,
                             author: MessageAuthor.TOOL,
                             text: `Executing tool ${call.name}...`,
                             toolName: call.name,
                             toolArgs: call.args
                         }));
                         setMessages(prev => [...prev, ...toolMessages]);
-                        setAgentActivity(`Executing ${functionCalls.length} tools in parallel...`);
+                        setAgentActivity(`Executing ${functionCalls.length} tool(s) in parallel...`);
 
                         // 2. Execute all tool calls concurrently using Promise.all
                         const toolPromises = functionCalls.map(call => {
@@ -420,8 +418,23 @@ const App: React.FC = () => {
                         });
 
                         const toolResults = await Promise.all(toolPromises);
+                        
+                        // 3. Update the UI with the tool results for better feedback
+                        setMessages(prev => {
+                            const newMessages = [...prev];
+                            toolResults.forEach((result, index) => {
+                                const messageIdToUpdate = toolMessages[index].id;
+                                const messageIndex = newMessages.findIndex(msg => msg.id === messageIdToUpdate);
+                                if (messageIndex !== -1) {
+                                    (newMessages[messageIndex] as ToolMessage).toolResult = result;
+                                    (newMessages[messageIndex] as ToolMessage).text = `Tool ${functionCalls[index].name} executed.`;
+                                }
+                            });
+                            return newMessages;
+                        });
 
-                        // 3. Prepare the aggregated response for the model
+
+                        // 4. Prepare the aggregated response for the model
                         const functionResponseParts = functionCalls.map((call, index) => {
                             const result = toolResults[index];
                             console.log(`Tool ${call.name} result:`, result);
