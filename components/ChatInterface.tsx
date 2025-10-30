@@ -1,9 +1,7 @@
-
-
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, SendMessagePayload } from '../types';
 import Message from './Message';
-import { SendIcon, BotIcon, PaperclipIcon, XIcon } from './Icons';
+import { SendIcon, BotIcon, PaperclipIcon, XIcon, SettingsIcon } from './Icons';
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -11,9 +9,11 @@ interface ChatInterfaceProps {
   isLoading: boolean;
   agentActivity: string | null;
   commandHistory: string[];
+  onSettingsClick: () => void;
+  isChatDisabled: boolean;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, isLoading, agentActivity, commandHistory }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, isLoading, agentActivity, commandHistory, onSettingsClick, isChatDisabled }) => {
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -44,7 +44,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
 
   // FIX: Refactored message sending logic to improve type safety and remove an `any` cast.
   const sendMessage = () => {
-    if ((input.trim() || images.length > 0) && !isLoading) {
+    if ((input.trim() || images.length > 0) && !isLoading && !isChatDisabled) {
       onSendMessage({ text: input.trim(), images });
       setInput('');
       setImages([]);
@@ -103,9 +103,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
       }
     }
   };
+  
+  const placeholderText = isChatDisabled 
+    ? "Chat is disabled. Open settings and select a Gemini model to continue."
+    : "Ask the agent to do something...";
+
 
   return (
     <div className="bg-slate-800/50 rounded-lg flex flex-col h-full">
+      <div className="flex justify-between items-center p-3 border-b border-slate-700 flex-shrink-0">
+        <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+            <BotIcon />
+            <span>AI Agent</span>
+        </h2>
+        <button onClick={onSettingsClick} className="text-slate-400 hover:text-white transition-colors">
+            <SettingsIcon />
+        </button>
+      </div>
       <div className="flex-grow p-4 overflow-y-auto">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-slate-400">
@@ -138,6 +152,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
         <div ref={messagesEndRef} />
       </div>
       <div className="p-4 border-t border-slate-700">
+        {isChatDisabled && (
+          <div className="text-center text-xs text-amber-400 mb-2 p-2 bg-amber-500/10 rounded-md">
+            The current agent logic only supports Gemini models. Please open settings and select a Gemini model to enable chat.
+          </div>
+        )}
         <div className="bg-slate-700 rounded-xl border border-transparent focus-within:border-indigo-500 transition-colors">
             {images.length > 0 && (
                 <div className="p-2 grid grid-cols-4 gap-2 border-b border-slate-600">
@@ -159,6 +178,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="text-slate-400 hover:text-indigo-400 transition-colors"
+              disabled={isChatDisabled}
             >
               <PaperclipIcon />
               <input 
@@ -175,13 +195,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask the agent to do something..."
+                placeholder={placeholderText}
                 className="flex-grow bg-transparent resize-none focus:outline-none text-slate-100 placeholder-slate-400 max-h-[200px] text-sm px-1"
                 rows={1}
             />
             <button
                 type="submit"
-                disabled={isLoading || (!input.trim() && images.length === 0)}
+                disabled={isLoading || (!input.trim() && images.length === 0) || isChatDisabled}
                 className="bg-indigo-600 rounded-full h-8 w-8 flex items-center justify-center text-white flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors"
             >
                 <SendIcon />

@@ -54,6 +54,8 @@ Available Tools:
 - readFile: To read the content of a specific file.
 - writeFile: To create a new file or overwrite an existing one. Use this for writing code, text, etc.
 - runJavascript: To execute JavaScript code in a sandboxed environment. You CANNOT make network requests or access browser APIs.
+- runTerminalCommand: To execute a shell command in a simulated terminal. Supports 'ls', 'cat [fileName]', 'echo [text]', and 'pwd'.
+- updateSystemInstruction: To modify your own core logic and instructions. Use this for self-improvement when requested by the user.
 
 IMPORTANT:
 - **Multilingual Research:** When appropriate, search in multiple languages to gather more comprehensive information, but always respond in the user's original language.
@@ -135,10 +137,42 @@ const readUrlTool: FunctionDeclaration = {
     }
 };
 
+const updateSystemInstructionTool: FunctionDeclaration = {
+    name: "updateSystemInstruction",
+    description: "Updates your core system instructions. Use this ONLY when the user explicitly asks you to change your behavior, logic, or personality. This is a powerful tool for self-improvement.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            newInstruction: {
+                type: Type.STRING,
+                description: "The new, complete system instruction string that will define your behavior going forward."
+            },
+        },
+        required: ["newInstruction"],
+    }
+};
+
+const runTerminalCommandTool: FunctionDeclaration = {
+    name: "runTerminalCommand",
+    description: "Executes a shell command in a simulated terminal environment. Supports basic commands like 'ls' (list files), 'cat [fileName]' (read file), 'echo [text]' (print text), and 'pwd' (print working directory).",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            command: {
+                type: Type.STRING,
+                description: "The shell command to execute, e.g., 'ls' or 'cat myFile.txt'."
+            },
+        },
+        required: ["command"],
+    }
+};
+
 export const customTools: FunctionDeclaration[] = [
     listFilesTool,
     readFileTool,
     writeFileTool,
     runJavascriptTool,
     readUrlTool,
+    updateSystemInstructionTool,
+    runTerminalCommandTool,
 ];

@@ -18,6 +18,7 @@ This is an advanced AI agent chatbot project built on the following core princip
     *   **Web Page Reading (`readUrl`)**: Extracts and understands content from web pages.
     *   **Local File System Integration**: Create, read, write, and list files from a user-selected folder on your local machine (`writeFile`, `readFile`, `listFiles`). (Requires a modern browser like Chrome or Edge).
     *   **Code Executor (`runJavascript`)**: Executes JavaScript code in a sandboxed environment for calculations, data processing, etc.
+    *   **Self-Amendment (`updateSystemInstruction`)**: The agent can dynamically update its own core instructions based on user feedback, allowing for on-the-fly behavioral changes.
 *   **IDE-like Interface**:
     *   Side panel with a file explorer and code editor.
     *   **Load a local folder** to manage its contents.
@@ -64,3 +65,9 @@ The agent is designed to handle situations where the user changes their mind or 
 *   **Soft Merge**: When the user adds a related sub-task or constraint (e.g., "While you're writing the code, please add comments explaining each line."), the agent will intelligently merge the new requirement into its existing plan without starting over. It will determine the most logical point to perform the new action.
 
 This allows for a more natural and flexible conversational flow, where the agent can adapt to evolving user needs.
+
+## 5. Self-Amendment
+
+A key feature of this agent is its ability to modify its own behavior during a conversation.
+
+Using the `updateSystemInstruction` tool, the agent can rewrite its core system prompt. This allows a user to dynamically change the agent's personality, update its rules, or provide new context that alters its planning and execution logic for all subsequent turns in the conversation. This enables a powerful feedback loop where the agent can learn and adapt without requiring a code change and redeployment.

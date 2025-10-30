@@ -6,6 +6,9 @@ import FileExplorer from './components/FileExplorer';
 import { useFileSystem } from './hooks/useFileSystem';
 import { ChatMessage, MessageAuthor, SendMessagePayload } from './types';
 import { SYSTEM_INSTRUCTION, customTools } from './constants';
+import { useLlm } from './hooks/useLlm';
+import SettingsModal from './components/SettingsModal';
+import { ChevronRightIcon } from './components/Icons';
 
 const Resizer: React.FC<{ onMouseDown: (event: React.MouseEvent) => void }> = ({ onMouseDown }) => (
     <div
@@ -31,8 +34,12 @@ const App: React.FC = () => {
     const [commandHistory, setCommandHistory] = useState<string[]>([]);
     const [panelSizes, setPanelSizes] = useState([25, 50, 25]);
     const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+    const [systemInstruction, setSystemInstruction] = useState(SYSTEM_INSTRUCTION);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isFileExplorerVisible, setIsFileExplorerVisible] = useState(true);
     const containerRef = useRef<HTMLDivElement>(null);
-
+    
+    const { llmConfig, setLlmConfig } = useLlm();
 
     const { 
         files, 
@@ -48,7 +55,18 @@ const App: React.FC = () => {
 
     const chatRef = useRef<Chat | null>(null);
 
-    const initializeChat = useCallback(() => {
+    const toggleFileExplorerVisibility = () => {
+        setIsFileExplorerVisible(prev => !prev);
+    };
+
+    useEffect(() => {
+        // This effect is the single source of truth for initializing and re-initializing the chat.
+        // It runs on mount and whenever the systemInstruction state or the Gemini-specific config changes.
+        if (llmConfig.provider !== 'gemini') {
+            chatRef.current = null;
+            return;
+        }
+
         if (!process.env.API_KEY) {
             console.error("API_KEY is not set.");
             setMessages(prev => [...prev, {
@@ -61,17 +79,14 @@ const App: React.FC = () => {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         
         chatRef.current = ai.chats.create({
-            model: 'gemini-2.5-pro',
+            model: llmConfig.model,
             config: {
-                systemInstruction: SYSTEM_INSTRUCTION,
+                systemInstruction: systemInstruction,
                 tools: [{ googleSearch: {} }, { functionDeclarations: customTools }],
             },
         });
-    }, []);
-
-    useEffect(() => {
-        initializeChat();
-    }, [initializeChat]);
+        console.log(`Chat initialized with model: ${llmConfig.model}`);
+    }, [systemInstruction, llmConfig.provider, llmConfig.model]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -159,11 +174,31 @@ const App: React.FC = () => {
             const summary = mainContent.substring(0, 4000) + (mainContent.length > 4000 ? '...' : '');
             return `Successfully extracted content from ${url}:\n\n${summary}`;
     
-        // FIX: Corrected the catch block syntax. The typo `_message` was replaced with `{` to form a valid catch block.
         } catch (e) {
             const error = e as Error;
             console.error(`Error fetching URL ${url}:`, error);
             return `Error: An exception occurred while trying to fetch the URL content. Message: ${error.message}`;
+        }
+    };
+
+    const runTerminalCommand = async (command: string): Promise<string> => {
+        const args = command.trim().split(/\s+/);
+        const cmd = args[0];
+
+        switch (cmd) {
+            case 'ls':
+                return listFiles();
+            case 'cat':
+                if (args.length < 2) {
+                    return "Error: 'cat' command requires a file name.";
+                }
+                return readFile(args[1]);
+            case 'echo':
+                return args.slice(1).join(' ');
+            case 'pwd':
+                return `Current directory: ${isFolderLoaded ? '/' : '(virtual)'}`;
+            default:
+                return `Error: command not found: ${cmd}. Supported commands are: ls, cat, echo, pwd.`;
         }
     };
 
@@ -181,10 +216,11 @@ const App: React.FC = () => {
     const handleSaveFile = async (fileName: string, content: string) => {
         await writeFile(fileName, content);
         setEditorContent(content); // Optimistic update
+        const saveLocation = isFolderLoaded ? "your local disk" : "the virtual file system";
         setMessages(prev => [...prev, {
             id: Date.now().toString(),
             author: MessageAuthor.TOOL,
-            text: `File '${fileName}' has been saved to your local disk.`,
+            text: `File '${fileName}' has been saved to ${saveLocation}.`,
             toolName: 'editor',
             toolArgs: { fileName },
             toolResult: 'Save successful'
@@ -192,13 +228,9 @@ const App: React.FC = () => {
     };
 
     const handleNewFile = async () => {
-        if (!isFolderLoaded) {
-            alert("Please load a folder first before creating a new file.");
-            return;
-        }
         const fileName = prompt("Enter new file name:");
         if (fileName && !files.includes(fileName)) {
-            await writeFile(fileName, ''); // This will also refresh the file list
+            await writeFile(fileName, '');
             setActiveFile(fileName);
             setEditorContent('');
         } else if (fileName) {
@@ -206,6 +238,11 @@ const App: React.FC = () => {
         }
     };
     
+    const updateSystemInstruction = async (newInstruction: string): Promise<string> => {
+        setSystemInstruction(newInstruction);
+        return "System instruction updated. Chat has been re-initialized with the new logic.";
+    };
+
     const executeTool = async (name: string, args: any) => {
         switch (name) {
             case 'listFiles':
@@ -220,8 +257,12 @@ const App: React.FC = () => {
                 return result;
             case 'runJavascript':
                 return await runJavascript(args.code);
+            case 'runTerminalCommand':
+                return await runTerminalCommand(args.command);
             case 'readUrl':
                 return await readUrl(args.url);
+            case 'updateSystemInstruction':
+                return await updateSystemInstruction(args.newInstruction);
             default:
                 return `Unknown tool: ${name}`;
         }
@@ -229,8 +270,10 @@ const App: React.FC = () => {
 
     const handleSendMessage = (payload: SendMessagePayload) => {
         if (!chatRef.current) {
-            initializeChat();
-            if (!chatRef.current) return;
+            const errorMessage: ChatMessage = { id: Date.now().toString() + '-error', author: MessageAuthor.AGENT, text: "Error: Chat is not initialized. Please ensure your API key is set correctly and refresh the page." };
+            setMessages(prev => [...prev, errorMessage]);
+            setIsLoading(false);
+            return;
         }
 
         if (payload.text) {
@@ -341,26 +384,56 @@ const App: React.FC = () => {
     };
 
     return (
-        <div className="h-screen w-screen p-4 flex bg-slate-900 font-sans" ref={containerRef}>
-            <div style={{ flex: `0 0 ${panelSizes[0]}%` }} className="h-full min-w-0">
-                <FileExplorer 
-                    files={files} 
-                    activeFile={activeFile} 
-                    onFileSelect={handleFileSelect} 
-                    onNewFile={handleNewFile}
-                    onLoadFolder={loadFolder}
-                    isFolderLoaded={isFolderLoaded}
-                    isApiSupported={isApiSupported}
-                    fsError={fsError}
-                />
-            </div>
-            <Resizer onMouseDown={() => handleMouseDown(0)} />
-            <div style={{ flex: `0 0 ${panelSizes[1]}%` }} className="h-full min-w-0">
-                <CodeEditor fileName={activeFile} fileContent={editorContent} onSave={handleSaveFile} />
-            </div>
-            <Resizer onMouseDown={() => handleMouseDown(1)} />
-            <div style={{ flex: `0 0 ${panelSizes[2]}%` }} className="h-full min-w-0">
-                <ChatInterface messages={messages} onSendMessage={handleSendMessage} isLoading={isLoading} agentActivity={agentActivity} commandHistory={commandHistory} />
+        <div className="h-screen w-screen p-4 flex bg-slate-900 font-sans">
+            <SettingsModal 
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                config={llmConfig}
+                onSave={setLlmConfig}
+            />
+            {!isFileExplorerVisible && (
+                <button
+                    onClick={toggleFileExplorerVisibility}
+                    className="absolute top-1/2 left-0 -translate-y-1/2 z-10 bg-slate-800 h-32 w-6 rounded-r-lg flex items-center justify-center text-slate-400 hover:bg-indigo-600 hover:text-white transition-colors"
+                    title="Show File Explorer"
+                >
+                    <ChevronRightIcon />
+                </button>
+            )}
+            <div className="flex w-full min-w-0" ref={containerRef}>
+                {isFileExplorerVisible && (
+                    <>
+                        <div style={{ flex: `1 1 ${panelSizes[0]}%` }} className="h-full min-w-0">
+                            <FileExplorer 
+                                files={files} 
+                                activeFile={activeFile} 
+                                onFileSelect={handleFileSelect} 
+                                onNewFile={handleNewFile}
+                                onLoadFolder={loadFolder}
+                                isFolderLoaded={isFolderLoaded}
+                                isApiSupported={isApiSupported}
+                                fsError={fsError}
+                                onToggleVisibility={toggleFileExplorerVisibility}
+                            />
+                        </div>
+                        <Resizer onMouseDown={() => handleMouseDown(0)} />
+                    </>
+                )}
+                <div style={{ flex: `1 1 ${panelSizes[1]}%` }} className="h-full min-w-0">
+                    <CodeEditor fileName={activeFile} fileContent={editorContent} onSave={handleSaveFile} />
+                </div>
+                <Resizer onMouseDown={() => handleMouseDown(1)} />
+                <div style={{ flex: `1 1 ${panelSizes[2]}%` }} className="h-full min-w-0">
+                    <ChatInterface 
+                        messages={messages} 
+                        onSendMessage={handleSendMessage} 
+                        isLoading={isLoading} 
+                        agentActivity={agentActivity} 
+                        commandHistory={commandHistory}
+                        onSettingsClick={() => setIsSettingsOpen(true)}
+                        isChatDisabled={llmConfig.provider !== 'gemini'}
+                    />
+                </div>
             </div>
         </div>
     );
