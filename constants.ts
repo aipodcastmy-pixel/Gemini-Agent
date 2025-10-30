@@ -1,65 +1,62 @@
 import { FunctionDeclaration, Type } from '@google/genai';
 
 export const SYSTEM_INSTRUCTION = `You are an expert AI agent designed to solve complex user requests by acting as a planner and an executor.
-You have access to a set of powerful tools and a virtual file system.
+You have access to a set of powerful tools, a virtual file system, a short-term working memory (scratchpad), and a long-term persistent memory (IndexedDB).
 
 Your Core Logic: Plan-Execute-Check Loop
 You operate in a continuous loop to fulfill user requests. For every request, you must follow these steps:
 
 1.  **Parse Intent & Plan:**
-    *   Carefully analyze the user's request to understand their primary goal.
-    *   Break down the goal into a sequence of smaller, executable steps (a task plan).
-    *   For each step, decide which tool is the most appropriate.
-    *   Example Plan: To answer "What is the latest news about the APEC summit and can you write a summary in a file?", your plan would be:
-        1. Call 'googleSearch' with query "latest APEC summit news".
-        2. Analyze results. Call 'readUrl' on the most relevant article.
-        3. Synthesize the information into a summary.
-        4. Call 'writeFile' to save the summary to a file named 'apec_summary.txt'.
+    *   Analyze the user's request to understand their primary goal.
+    *   Break down the goal into a sequence of executable steps (a task plan).
+    *   **Memory Strategy:** Decide if you need to remember information.
+        *   For temporary info within the current task (like file content you're about to process), use the 'updateScratchpad' tool. This is your short-term memory and is cleared after the session.
+        *   For information the user wants you to remember across conversations (like user preferences, notes, or data that should persist), use the 'indexedDBWrite' tool. This is your long-term memory.
+    *   Example Plan: To save a user's favorite color and then use it.
+        1. Call 'indexedDBWrite' with key 'user_favorite_color' and value 'blue'.
+        2. Acknowledge that the preference has been saved for future sessions.
 
 2.  **Execute & Gather Evidence:**
     *   Execute the first step of your plan by calling the chosen tool.
     *   I will execute the tool for you and return the result, which you should treat as "evidence".
-    *   Acknowledge the evidence and proceed to the next step in your plan.
 
 3.  **Check & Adapt (Crucial for Error Handling):**
     *   After each tool execution, check the result.
     *   **If the tool succeeded:** Continue with your plan.
     *   **If the tool failed (returned an error):** DO NOT STOP. You must adapt.
-        *   Announce the failure to the user (e.g., "I couldn't access that URL because of an error.").
-        *   Re-evaluate your plan. Is there another way to achieve the goal?
-        *   Formulate a new plan. For example, if 'readUrl' fails, a good new plan is to use 'googleSearch' to find an alternative source.
-        *   Explicitly state your new plan before executing it.
+        *   Announce the failure and formulate a new plan. For example, if 'readUrl' fails, use 'duckduckgoSearch' to find an alternative.
 
 4.  **Respond:**
-    *   Once all steps in your plan are complete and you have gathered enough evidence to satisfy the user's request, provide a comprehensive final answer.
-    *   If you've created or modified files, mention them in your final response.
+    *   After executing a "silent" tool (like updateScratchpad, writeFile, indexedDBWrite), provide a brief, natural confirmation (e.g., "Okay, I've noted that for later." or "I've saved that information permanently.").
+    *   Once all steps are complete, provide a comprehensive final answer.
 
 Your Dynamic Update Strategy (Handling Goal Changes)
-Sometimes, users change their minds. You must adapt your plan accordingly.
-
-*   **Hard Pivot:** When the user issues a new, unrelated command (e.g., "Forget about the news, write me a poem about a cat."), you must:
-    1.  Acknowledge the change and confirm that you are abandoning the previous goal.
-    2.  Discard your old plan completely.
-    3.  Create a new plan for the new goal and start executing it.
-
-*   **Soft Merge:** When the user adds a related or clarifying instruction (e.g., while you are summarizing an article, they say "also, find out who the author is and when it was published."), you must:
-    1.  Acknowledge the new instruction.
-    2.  Integrate the new sub-task into your current plan. Decide on the best order. For instance, finding the author/date before finishing the summary is usually logical.
-    3.  Continue executing the updated plan.
+Users may change their minds. Adapt your plan accordingly using "Hard Pivots" for new goals or "Soft Merges" for related sub-tasks.
 
 Available Tools:
-- googleSearch: For searching the web for real-time information, news, facts, or finding URLs.
-- readUrl: To fetch the content of a web page. Use this after finding a relevant URL with googleSearch.
-- listFiles: To see the files in the current directory.
-- readFile: To read the content of a specific file.
-- writeFile: To create a new file or overwrite an existing one. Use this for writing code, text, etc.
-- runJavascript: To execute JavaScript code in a sandboxed environment. You CANNOT make network requests or access browser APIs.
-- runTerminalCommand: To execute a shell command in a simulated terminal. Supports 'ls', 'cat [fileName]', 'echo [text]', and 'pwd'.
-- updateSystemInstruction: To modify your own core logic and instructions. Use this for self-improvement when requested by the user.
+- **Long-Term Memory (Persistent):**
+    - indexedDBWrite: To save or update a key-value pair in your permanent memory.
+    - indexedDBRead: To retrieve data from your permanent memory.
+    - indexedDBDelete: To delete data from your permanent memory.
+    - indexedDBKeys: To list all keys available in your permanent memory.
+- **Short-Term Memory (Session only):**
+    - updateScratchpad: To save key-value pairs to your session's scratchpad.
+    - readScratchpad: To read the content of your session's scratchpad.
+- **File System:**
+    - listFiles: To see the files in the current directory.
+    - readFile: To read the content of a specific file.
+    - writeFile: To create a new file or overwrite an existing one.
+- **Web Access:**
+    - duckduckgoSearch: For searching the web for real-time information.
+    - readUrl: To fetch the content of a web page.
+- **Execution & System:**
+    - runJavascript: To execute JavaScript code in a sandboxed environment.
+    - runTerminalCommand: To execute a shell command in a simulated terminal.
+    - updateSystemInstruction: To modify your own core logic when requested by the user.
 
 IMPORTANT:
-- **Multilingual Research:** When appropriate, search in multiple languages to gather more comprehensive information, but always respond in the user's original language.
-- **Tool Usage:** Don't ask for permission to use tools; just use them as part of your plan. Ensure arguments are correct, e.g., 'content' for 'writeFile' must be a single string.
+- Always respond in the user's original language.
+- Don't ask for permission to use tools; just use them as part of your plan.
 `;
 
 
@@ -122,6 +119,21 @@ const runJavascriptTool: FunctionDeclaration = {
     }
 };
 
+const duckduckgoSearchTool: FunctionDeclaration = {
+    name: "duckduckgoSearch",
+    description: "Performs a web search using DuckDuckGo to get real-time information, news, or discover URLs. Returns a list of search results with titles, links, and snippets.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            query: {
+                type: Type.STRING,
+                description: "The search query."
+            },
+        },
+        required: ["query"],
+    }
+};
+
 const readUrlTool: FunctionDeclaration = {
     name: "readUrl",
     description: "Fetches and returns the text content of a given URL. Useful for reading articles or web pages found via web search.",
@@ -167,6 +179,95 @@ const runTerminalCommandTool: FunctionDeclaration = {
     }
 };
 
+const updateScratchpadTool: FunctionDeclaration = {
+    name: "updateScratchpad",
+    description: "Updates a key-value pair in your short-term memory (scratchpad). Use this to store and recall information within a single session, like file contents, user preferences, or intermediate results. Overwrites existing keys.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            key: {
+                type: Type.STRING,
+                description: "The unique key to store the information under."
+            },
+            value: {
+                type: Type.STRING,
+                description: "The string value to store. Can be simple text or a JSON stringified object."
+            },
+        },
+        required: ["key", "value"],
+    }
+};
+
+const readScratchpadTool: FunctionDeclaration = {
+    name: "readScratchpad",
+    description: "Reads the entire content of your short-term memory (scratchpad). Use this to review what you've stored before making your next move.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: [],
+    }
+};
+
+const indexedDBWriteTool: FunctionDeclaration = {
+    name: "indexedDBWrite",
+    description: "Writes or updates a key-value pair in your long-term, persistent memory (IndexedDB). Use this to remember information across sessions, like user preferences or important data.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            key: {
+                type: Type.STRING,
+                description: "The unique key to store the data under."
+            },
+            value: {
+                type: Type.STRING,
+                description: "The JSON stringified value to store permanently."
+            },
+        },
+        required: ["key", "value"],
+    }
+};
+
+const indexedDBReadTool: FunctionDeclaration = {
+    name: "indexedDBRead",
+    description: "Reads a value from your long-term memory (IndexedDB) using its key.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            key: {
+                type: Type.STRING,
+                description: "The key of the data to retrieve."
+            },
+        },
+        required: ["key"],
+    }
+};
+
+const indexedDBDeleteTool: FunctionDeclaration = {
+    name: "indexedDBDelete",
+    description: "Deletes a key-value pair from your long-term memory (IndexedDB).",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            key: {
+                type: Type.STRING,
+                description: "The key of the data to delete."
+            },
+        },
+        required: ["key"],
+    }
+};
+
+const indexedDBKeysTool: FunctionDeclaration = {
+    name: "indexedDBKeys",
+    description: "Lists all the keys currently stored in your long-term memory (IndexedDB), allowing you to know what information you have stored.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: [],
+    }
+};
+
+
 export const customTools: FunctionDeclaration[] = [
     listFilesTool,
     readFileTool,
@@ -175,4 +276,11 @@ export const customTools: FunctionDeclaration[] = [
     readUrlTool,
     updateSystemInstructionTool,
     runTerminalCommandTool,
+    updateScratchpadTool,
+    readScratchpadTool,
+    duckduckgoSearchTool,
+    indexedDBWriteTool,
+    indexedDBReadTool,
+    indexedDBDeleteTool,
+    indexedDBKeysTool,
 ];

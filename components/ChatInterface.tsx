@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ChatMessage, SendMessagePayload } from '../types';
 import Message from './Message';
 import { SendIcon, BotIcon, PaperclipIcon, XIcon, SettingsIcon } from './Icons';
@@ -33,12 +33,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     scrollToBottom();
   }, [messages, isLoading]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
-      textarea.style.height = 'auto';
+      const maxHeight = 200; // pixels
+      textarea.style.height = 'auto'; // Reset height to recalculate
       const scrollHeight = textarea.scrollHeight;
-      textarea.style.height = `${Math.min(scrollHeight, 200)}px`;
+
+      if (scrollHeight > maxHeight) {
+        textarea.style.height = `${maxHeight}px`;
+        textarea.style.overflowY = 'auto';
+      } else {
+        textarea.style.height = `${scrollHeight}px`;
+        textarea.style.overflowY = 'hidden';
+      }
     }
   }, [input]);
 
@@ -196,7 +204,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={placeholderText}
-                className="flex-grow bg-transparent resize-none focus:outline-none text-slate-100 placeholder-slate-400 max-h-[200px] text-sm px-1"
+                className="flex-grow bg-transparent resize-none focus:outline-none text-slate-100 placeholder-slate-400 text-sm px-1"
                 rows={1}
             />
             <button

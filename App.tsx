@@ -9,6 +9,7 @@ import { SYSTEM_INSTRUCTION, customTools } from './constants';
 import { useLlm } from './hooks/useLlm';
 import SettingsModal from './components/SettingsModal';
 import { ChevronRightIcon } from './components/Icons';
+import { useIndexedDB } from './hooks/useIndexedDB';
 
 const Resizer: React.FC<{ onMouseDown: (event: React.MouseEvent) => void }> = ({ onMouseDown }) => (
     <div
@@ -37,9 +38,11 @@ const App: React.FC = () => {
     const [systemInstruction, setSystemInstruction] = useState(SYSTEM_INSTRUCTION);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isFileExplorerVisible, setIsFileExplorerVisible] = useState(true);
+    const [scratchpad, setScratchpad] = useState<Record<string, any>>({});
     const containerRef = useRef<HTMLDivElement>(null);
     
     const { llmConfig, setLlmConfig } = useLlm();
+    const { data: indexedDbData, writeData, readData, deleteData, getAllKeys, clearDB } = useIndexedDB();
 
     const { 
         files, 
@@ -82,7 +85,7 @@ const App: React.FC = () => {
             model: llmConfig.model,
             config: {
                 systemInstruction: systemInstruction,
-                tools: [{ googleSearch: {} }, { functionDeclarations: customTools }],
+                tools: [{ functionDeclarations: customTools }],
             },
         });
         console.log(`Chat initialized with model: ${llmConfig.model}`);
@@ -103,7 +106,11 @@ const App: React.FC = () => {
                 const totalSize = newSizes[leftPanelIndex] + newSizes[rightPanelIndex];
                 let newLeftSize = newSizes[leftPanelIndex] + dxPercentage;
                 
-                newLeftSize = Math.max(10, Math.min(newLeftSize, totalSize - 10));
+                // Set a minimum width of 200px for the panels being resized.
+                const minPanelPixels = 200;
+                const minPanelPercentage = (minPanelPixels / containerWidth) * 100;
+
+                newLeftSize = Math.max(minPanelPercentage, Math.min(newLeftSize, totalSize - minPanelPercentage));
     
                 const newRightSize = totalSize - newLeftSize;
                 
@@ -181,6 +188,42 @@ const App: React.FC = () => {
         }
     };
 
+    const duckduckgoSearch = async (query: string): Promise<string> => {
+        try {
+            setAgentActivity(`Searching for: ${query}...`);
+            const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
+            const response = await fetch(proxyUrl);
+
+            if (!response.ok) {
+                return `Error: Search failed. Server responded with status ${response.status}.`;
+            }
+            const htmlContent = await response.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            const results = Array.from(doc.querySelectorAll('.result')).slice(0, 5);
+
+            if (results.length === 0) {
+                return "No search results found for that query.";
+            }
+
+            const searchResults = results.map(result => {
+                const titleElement = result.querySelector('.result__title a');
+                const snippetElement = result.querySelector('.result__snippet');
+                const title = titleElement?.textContent?.trim() || 'No title';
+                const link = (titleElement as HTMLAnchorElement)?.href || 'No link';
+                const snippet = snippetElement?.textContent?.trim() || 'No snippet';
+                return `Title: ${title}\nURL: ${link}\nSnippet: ${snippet}`;
+            });
+
+            return `Search results for "${query}":\n\n${searchResults.join('\n\n---\n\n')}`;
+        } catch (e) {
+            const error = e as Error;
+            console.error(`Error during DuckDuckGo search for "${query}":`, error);
+            return `Error: An exception occurred while trying to perform the search. Message: ${error.message}`;
+        }
+    };
+
     const runTerminalCommand = async (command: string): Promise<string> => {
         const args = command.trim().split(/\s+/);
         const cmd = args[0];
@@ -243,6 +286,33 @@ const App: React.FC = () => {
         return "System instruction updated. Chat has been re-initialized with the new logic.";
     };
 
+    const updateScratchpad = async (key: string, value: any): Promise<string> => {
+        setScratchpad(prev => ({ ...prev, [key]: value }));
+        return `Successfully updated scratchpad with key '${key}'.`;
+    };
+    
+    const readScratchpad = async (): Promise<string> => {
+        if (Object.keys(scratchpad).length === 0) {
+            return "Your scratchpad is currently empty.";
+        }
+        return JSON.stringify(scratchpad, null, 2);
+    };
+
+    const indexedDBWrite = async (key: string, value: string): Promise<string> => {
+        try {
+            // The agent will pass a string, we need to parse it back to an object if possible
+            let parsedValue;
+            try {
+                parsedValue = JSON.parse(value);
+            } catch {
+                parsedValue = value;
+            }
+            return await writeData(key, parsedValue);
+        } catch (e) {
+            return `Error writing to IndexedDB: ${(e as Error).message}`;
+        }
+    };
+
     const executeTool = async (name: string, args: any) => {
         switch (name) {
             case 'listFiles':
@@ -261,8 +331,22 @@ const App: React.FC = () => {
                 return await runTerminalCommand(args.command);
             case 'readUrl':
                 return await readUrl(args.url);
+            case 'duckduckgoSearch':
+                return await duckduckgoSearch(args.query);
             case 'updateSystemInstruction':
                 return await updateSystemInstruction(args.newInstruction);
+            case 'updateScratchpad':
+                return await updateScratchpad(args.key, args.value);
+            case 'readScratchpad':
+                return await readScratchpad();
+            case 'indexedDBWrite':
+                return await indexedDBWrite(args.key, args.value);
+            case 'indexedDBRead':
+                return await readData(args.key);
+            case 'indexedDBDelete':
+                return await deleteData(args.key);
+            case 'indexedDBKeys':
+                return await getAllKeys();
             default:
                 return `Unknown tool: ${name}`;
         }
@@ -318,40 +402,33 @@ const App: React.FC = () => {
                         
                         console.log("Model requested tool calls:", functionCalls);
 
-                        const functionResponseParts: any[] = [];
-                        const toolMessages: ChatMessage[] = [];
+                        // 1. Show all tool-in-progress messages at once for better UX
+                        const toolMessages: ChatMessage[] = functionCalls.map(call => ({
+                            id: `${Date.now()}-${call.name}-${Math.random()}`, // Add random to ensure unique key
+                            author: MessageAuthor.TOOL,
+                            text: `Executing tool ${call.name}...`,
+                            toolName: call.name,
+                            toolArgs: call.args
+                        }));
+                        setMessages(prev => [...prev, ...toolMessages]);
+                        setAgentActivity(`Executing ${functionCalls.length} tools in parallel...`);
 
-                        for (const call of functionCalls) {
-                            const activityText = call.name === 'googleSearch' 
-                                ? 'Searching the web...' 
-                                : `Using tool: ${call.name}...`;
-                            setAgentActivity(activityText);
+                        // 2. Execute all tool calls concurrently using Promise.all
+                        const toolPromises = functionCalls.map(call => {
+                            console.log(`Executing custom tool (in parallel): ${call.name}`, call.args);
+                            return executeTool(call.name, call.args);
+                        });
 
-                            let result;
-                            if (call.name === 'googleSearch') {
-                                result = "OK, search results are available to the model.";
-                                console.log("Acknowledging googleSearch.");
-                            } else {
-                                console.log(`Executing custom tool: ${call.name}`, call.args);
-                                toolMessages.push({
-                                    id: `${Date.now()}-${call.name}`,
-                                    author: MessageAuthor.TOOL,
-                                    text: `Executing tool ${call.name}...`,
-                                    toolName: call.name,
-                                    toolArgs: call.args
-                                });
-                                result = await executeTool(call.name, call.args);
-                                console.log(`Tool ${call.name} result:`, result);
-                            }
-                            
-                            functionResponseParts.push({
+                        const toolResults = await Promise.all(toolPromises);
+
+                        // 3. Prepare the aggregated response for the model
+                        const functionResponseParts = functionCalls.map((call, index) => {
+                            const result = toolResults[index];
+                            console.log(`Tool ${call.name} result:`, result);
+                            return {
                                 functionResponse: { name: call.name, response: { result } },
-                            });
-                        }
-
-                        if (toolMessages.length > 0) {
-                            setMessages(prev => [...prev, ...toolMessages]);
-                        }
+                            };
+                        });
 
                         setAgentActivity('Processing tool results...');
                         console.log("Sending tool responses back to model:", functionResponseParts);
@@ -390,6 +467,8 @@ const App: React.FC = () => {
                 onClose={() => setIsSettingsOpen(false)}
                 config={llmConfig}
                 onSave={setLlmConfig}
+                indexedDbData={indexedDbData}
+                onClearIndexedDb={clearDB}
             />
             {!isFileExplorerVisible && (
                 <button
