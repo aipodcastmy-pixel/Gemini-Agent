@@ -1,23 +1,88 @@
 
-import React, { useEffect, useState } from 'react';
+
+import React, { useEffect, useState, useRef } from 'react';
 import { FileIcon } from './Icons';
 
 interface CodeEditorProps {
   fileName: string | null;
   fileContent: string | undefined;
-  onSave: (fileName: string, content: string) => void;
+  onSave: (fileName: string, content: string) => Promise<void>;
 }
+
+type SaveStatus = 'idle' | 'unsaved' | 'saving' | 'saved';
 
 const CodeEditor: React.FC<CodeEditorProps> = ({ fileName, fileContent, onSave }) => {
   const [content, setContent] = useState('');
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  
+  const debounceTimeout = useRef<number | null>(null);
+  const statusTimeout = useRef<number | null>(null);
 
   useEffect(() => {
     setContent(fileContent || '');
-  }, [fileContent]);
+    setSaveStatus('idle');
+    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+    if (statusTimeout.current) clearTimeout(statusTimeout.current);
+  }, [fileName, fileContent]);
 
-  const handleSave = () => {
-    if (fileName) {
-      onSave(fileName, content);
+  useEffect(() => {
+    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+    if (statusTimeout.current) clearTimeout(statusTimeout.current);
+    
+    const hasUnsavedChanges = content !== fileContent && fileName !== null;
+
+    if (!hasUnsavedChanges) {
+      if (saveStatus !== 'saved') {
+        setSaveStatus('idle');
+      }
+      return;
+    }
+    
+    setSaveStatus('unsaved');
+
+    debounceTimeout.current = window.setTimeout(async () => {
+      if (fileName) {
+        setSaveStatus('saving');
+        await onSave(fileName, content);
+        setSaveStatus('saved');
+
+        statusTimeout.current = window.setTimeout(() => {
+          setSaveStatus('idle');
+        }, 2000);
+      }
+    }, 1500);
+
+    return () => {
+      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      if (statusTimeout.current) clearTimeout(statusTimeout.current);
+    };
+  }, [content, fileName, fileContent, onSave]);
+
+  const handleManualSave = async () => {
+    if (fileName && saveStatus === 'unsaved') {
+      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      if (statusTimeout.current) clearTimeout(statusTimeout.current);
+      
+      setSaveStatus('saving');
+      await onSave(fileName, content);
+      setSaveStatus('saved');
+      
+      statusTimeout.current = window.setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2000);
+    }
+  };
+  
+  const renderSaveStatus = () => {
+    switch (saveStatus) {
+      case 'unsaved':
+        return <span className="text-xs text-amber-400">Unsaved</span>;
+      case 'saving':
+        return <span className="text-xs text-slate-400 animate-pulse">Saving...</span>;
+      case 'saved':
+        return <span className="text-xs text-green-400">Saved</span>;
+      default:
+        return <span className="text-xs w-14">&nbsp;</span>; // Placeholder for alignment
     }
   };
 
@@ -36,12 +101,16 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ fileName, fileContent, onSave }
           <FileIcon />
           <span className="ml-1 text-slate-200">{fileName}</span>
         </div>
-        <button
-          onClick={handleSave}
-          className="px-4 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm"
-        >
-          Save
-        </button>
+        <div className="flex items-center gap-4">
+          {renderSaveStatus()}
+          <button
+            onClick={handleManualSave}
+            disabled={saveStatus !== 'unsaved'}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Save
+          </button>
+        </div>
       </div>
       <div className="flex-grow p-1">
         <textarea

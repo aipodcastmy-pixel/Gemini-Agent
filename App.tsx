@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Chat, Part } from '@google/genai';
 import React, { useState, useRef, useEffect } from 'react';
 import ChatInterface from './components/ChatInterface';
@@ -8,7 +9,6 @@ import { ChatMessage, MessageAuthor, SendMessagePayload, ToolMessage } from './t
 import { SYSTEM_INSTRUCTION, customTools } from './constants';
 import { useLlm } from './hooks/useLlm';
 import SettingsModal from './components/SettingsModal';
-import NewTaskModal from './components/NewTaskModal';
 import { ChevronRightIcon } from './components/Icons';
 import { useIndexedDB } from './hooks/useIndexedDB';
 
@@ -38,7 +38,6 @@ const App: React.FC = () => {
     const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
     const [systemInstruction, setSystemInstruction] = useState(SYSTEM_INSTRUCTION);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [isNewTaskModalOpen, setIsNewTaskModalOpen] = useState(false);
     const [isFileExplorerVisible, setIsFileExplorerVisible] = useState(true);
     const [scratchpad, setScratchpad] = useState<Record<string, any>>({});
     const containerRef = useRef<HTMLDivElement>(null);
@@ -259,16 +258,11 @@ const App: React.FC = () => {
     
     const handleSaveFile = async (fileName: string, content: string) => {
         await writeFile(fileName, content);
-        setEditorContent(content); // Optimistic update
-        const saveLocation = isFolderLoaded ? "your local disk" : "the virtual file system";
-        setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            author: MessageAuthor.TOOL,
-            text: `File '${fileName}' has been saved to ${saveLocation}.`,
-            toolName: 'editor',
-            toolArgs: { fileName },
-            toolResult: 'Save successful'
-        }]);
+        // Keep parent state in sync to ensure the editor's "unsaved" status
+        // logic works correctly after a save.
+        if (activeFile === fileName) {
+            setEditorContent(content);
+        }
     };
 
     const handleNewFile = async () => {
@@ -475,32 +469,6 @@ const App: React.FC = () => {
         }, 0);
     };
 
-    const handleStartNewTask = ({ title, description }: { title: string; description: string }) => {
-        // 1. Clear chat and short-term memory
-        setMessages([]);
-        setScratchpad({});
-    
-        // 2. Using a timeout to ensure this message appears after the state has cleared
-        setTimeout(() => {
-            // Add a system message announcing the new task
-            setMessages([
-                {
-                    id: Date.now().toString(),
-                    author: MessageAuthor.AGENT,
-                    text: `## New Task: ${title}\n\nStarting a new session. Short-term memory has been cleared.`
-                }
-            ]);
-    
-            // If there's a description, send it as the first user prompt
-            if (description.trim()) {
-                handleSendMessage({ text: description });
-            }
-        }, 50); // Small delay to allow UI to update
-    
-        // 3. Close the modal
-        setIsNewTaskModalOpen(false);
-    };
-
     return (
         <div className="h-screen w-screen p-4 flex bg-slate-900 font-sans">
             <SettingsModal 
@@ -510,11 +478,6 @@ const App: React.FC = () => {
                 onSave={setLlmConfig}
                 indexedDbData={indexedDbData}
                 onClearIndexedDb={clearDB}
-            />
-            <NewTaskModal
-                isOpen={isNewTaskModalOpen}
-                onClose={() => setIsNewTaskModalOpen(false)}
-                onStartTask={handleStartNewTask}
             />
             {!isFileExplorerVisible && (
                 <button
@@ -555,7 +518,6 @@ const App: React.FC = () => {
                         isLoading={isLoading} 
                         agentActivity={agentActivity} 
                         commandHistory={commandHistory}
-                        onNewTaskClick={() => setIsNewTaskModalOpen(true)}
                         onSettingsClick={() => setIsSettingsOpen(true)}
                         isChatDisabled={llmConfig.provider !== 'gemini'}
                     />
