@@ -1,0 +1,5 @@
+{
+  "name": "Gemini AI Agent Chatbox",
+  "description": "An advanced chat interface where a Gemini-powered AI agent can use tools like a file editor, JavaScript runtime, and web search to solve complex tasks.",
+  "requestFramePermissions": []
+}

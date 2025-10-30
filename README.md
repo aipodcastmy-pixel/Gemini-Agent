@@ -1,11 +1,65 @@
-<div align="center">
+# Gemini AI Agent Chatbox
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+## 1. 目标与原则 (Goals & Principles)
 
-  <h1>Built with AI Studio</h2>
+这是一个高级的AI代理聊天机器人项目，其核心原则是：
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+*   **工具优先 (Tool-first)**: AI大语言模型（LLM）主要负责决策、规划和解释，而所有事实的获取和具体操作都交给专门的工具来执行。
+*   **零硬编码 (Zero Hard-coding)**: 代理本身不应内置任何关于特定任务的硬编码逻辑（例如SQL模板、API路径等）。所有的行为都应该由它在运行时通过工具获取的“证据”来驱动。
+*   **可解释性 (Explainable)**: 代理的每一步操作都应该有清晰、结构化的记录，方便调试和理解其“思考”过程。
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## 2. 功能特性 (Features)
 
-</div>
+*   **交互式聊天界面**: 一个流畅、美观的聊天窗口。
+*   **Gemini AI 代理**: 由 Google 最新的 `gemini-2.5-pro` 模型驱动。
+*   **强大的工具集**:
+    *   **网页搜索 (`googleSearch`)**: 实时访问互联网信息。
+    *   **网页阅读 (`readUrl`)**: 提取并理解网页内容。
+    *   **虚拟文件系统**: 可以在浏览器环境中创建、读取、写入和列出文件 (`writeFile`, `readFile`, `listFiles`)。
+    *   **代码执行器 (`runJavascript`)**: 在沙箱环境中执行 JavaScript 代码，用于计算、数据处理等。
+*   **集成开发环境 (IDE-like Interface)**:
+    *   侧边栏提供文件浏览器和代码编辑器。
+    *   可以直接在UI中创建、查看和保存文件。
+*   **实时状态反馈**: 明确显示代理当前正在执行的任务（例如：“思考中...”、“正在搜索网页...”）。
+*   **命令历史**: 在输入框中按“上/下”箭头键可以快速调用之前发送过的命令。
+*   **Markdown 渲染**: 代理的回复会以格式化的 Markdown 形式呈现，提高可读性。
+
+## 3. Agent 状态逻辑说明 (Agent Status Logic)
+
+这是当前代理运行的核心逻辑，它是一个基于工具调用的循环状态机。
+
+1.  **接收输入 (Input Reception)**
+    *   应用接收用户的输入，并将其封装成用户消息。
+    *   UI 状态更新为 `isLoading = true`，并显示初始活动状态，如 `agentActivity = '思考中...'`。
+
+2.  **发送至模型 (Send to Model)**
+    *   将用户的消息发送给 Gemini 模型。
+
+3.  **模型决策 (Model Decision)**
+    *   模型会返回一个响应。这个响应有两种可能：
+        a. **最终回复**: 一个纯文本的回答。
+        b. **工具调用请求**: 一个或多个函数调用请求（`functionCalls`），其中可能包含内置的 `googleSearch` 或我们定义的自定义工具。
+
+4.  **工具执行循环 (Tool Execution Loop)**
+    *   如果模型返回的是**工具调用请求**，应用将进入此循环：
+        *   遍历所有 `functionCalls`。
+        *   **更新UI状态**: 根据当前执行的工具名称，更新 `agentActivity` 状态（例如，`'正在搜索网页...'` 或 `'正在使用工具: readFile...'`）。
+        *   **执行工具**:
+            *   如果是 `googleSearch`，应用不会在本地执行任何操作，而是准备一个确认信息，表示搜索结果已对模型可用。
+            *   如果是自定义工具（如 `readFile`, `readUrl` 等），应用会调用前端对应的`executeTool`函数，并等待其返回结果。
+        *   **收集结果**: 将所有工具的执行结果（或确认信息）收集到一个数组中。
+        *   **结果发回模型**: 将这个包含所有工具结果的数组作为新的消息发送回 Gemini 模型。
+        *   **循环继续**: 程序返回到第3步，等待模型的下一个决策。模型可能会根据工具结果决定调用更多工具，或给出最终回复。
+
+5.  **生成最终回复 (Final Response Generation)**
+    *   如果模型在第3步返回的是**最终回复**（即 `functionCalls` 为空），则工具执行循环结束。
+    *   应用将模型的文本回复格式化为代理消息。
+    *   UI 状态更新为 `isLoading = false`，`agentActivity` 设为 `null`。
+
+6.  **错误处理 (Error Handling)**
+    *   在整个过程中的任何一步如果发生异常，`try...catch` 块会捕获错误。
+    *   应用会向用户显示一条通用的错误消息，并**在开发者控制台打印详细的调试报告**，包括错误发生时的用户输入和完整的对话历史。
+
+---
+
+这个 `README.md` 文件将作为我们项目的核心文档，我会随着功能的迭代不断更新它。
