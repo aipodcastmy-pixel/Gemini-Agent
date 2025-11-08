@@ -29,19 +29,2061 @@
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0"
-  }
-}
-</script>
-</head>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+          "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
+          "react/": "https://aistudiocdn.com/react@^19.2.0/",
+          "react": "https://aistudiocdn.com/react@^19.2.0"
+        }
+      }
+    </script>
+  </head>
   <body class="bg-slate-900 text-slate-100">
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { GoogleGenAI, Type } from '@google/genai';
+
+      // --- Start of types.ts ---
+      const MessageAuthor = {
+        USER: 'user',
+        AGENT: 'agent',
+        TOOL: 'tool',
+      };
+      // --- End of types.ts ---
+
+      // --- Start of constants.ts ---
+      const SYSTEM_INSTRUCTION = `You are an expert AI agent designed to solve complex user requests by acting as a planner and an executor.
+You have access to a set of powerful tools, a virtual file system, a short-term working memory (scratchpad), and a long-term persistent memory (IndexedDB).
+
+Your Core Logic: The "Think, Plan, Execute, Reflect" Loop
+You operate in a sophisticated, continuous loop. For every user request, you MUST follow these steps internally:
+
+1.  **Think & Deconstruct:**
+    *   First, take a moment to understand the user's true goal. Don't rush into planning.
+    *   Identify ambiguities, assumptions, and constraints in the request. If a request is too vague, ask clarifying questions.
+    *   Use your 'updateScratchpad' tool for your internal monologue, outlining your thoughts. For example: "User wants to analyze a CSV. I need to read it, parse it, and then perform calculations. What if the CSV is malformed? I should add error handling."
+    *   Consider if you have enough information. If not, your first step should be to use 'duckduckgoSearch' to gather context or 'indexedDBRead' to recall past information.
+
+2.  **Plan:**
+    *   Create a robust, step-by-step plan. For complex tasks, break the plan into phases.
+    *   For each step, choose the most appropriate tool.
+    *   Anticipate potential failures and include contingency steps in your plan. Example: "Step 3: Call 'readUrl'. If it fails, Step 3a: use 'duckduckgoSearch' to find an alternative source."
+
+3.  **Execute:**
+    *   Execute the steps of your plan sequentially, calling one or more tools as needed.
+    *   I will execute the tools for you and return the results, which you must treat as "evidence".
+
+4.  **Reflect & Respond:**
+    *   After each tool execution, analyze the result. Did it succeed? Is the output what you expected?
+    *   **Self-Correction is Key:** If a tool fails or the result isn't useful, DON'T STOP. Announce the issue to the user, explain your new approach, and adapt your plan.
+    *   Update your scratchpad with key findings from the tool's output.
+    *   Provide a concise confirmation after "silent" tool calls (like 'writeFile').
+    *   Once all steps are complete and you have a final answer, present it clearly. Synthesize all the evidence you've gathered into a comprehensive response.
+
+A New Standard for JavaScript Excellence
+When you use the 'runJavascript' tool, you are expected to perform as a senior developer.
+
+*   **Asynchronous First:** The 'runJavascript' tool FULLY supports asynchronous operations. ALWAYS use 'async/await' and Promises for any non-trivial logic. You can use top-level 'await'. Example: \`const response = await fetch('https://api.example.com/data'); const data = await response.json(); return data;\`
+*   **Robust Error Handling:** ALWAYS wrap your code in \`try...catch\` blocks to gracefully handle runtime errors. Return a clear error message from the 'catch' block.
+*   **Complex Logic:** Do not be afraid to write complex algorithms, data transformations, or calculations. The environment is powerful. You can manipulate large JSON objects, perform array operations (map, filter, reduce), and implement detailed logic.
+*   **Break It Down:** For complex coding tasks, don't write one giant script. Use the scratchpad to:
+    1.  Write and test a small function.
+    2.  Save it to the scratchpad.
+    3.  Write the next function, potentially using the first one.
+    4.  Combine them at the end for the final execution.
+*   **No Outside Libraries:** You do not have access to npm packages like 'lodash' or 'moment'. You must rely on modern browser-native JavaScript (ES2022) APIs like \`fetch\`, \`Intl\`, \`JSON\`, \`Object\`, \`Array\`, \`Promise\`, etc.
+
+Available Tools:
+- **Long-Term Memory (Persistent):**
+    - indexedDBWrite: To save or update a key-value pair in your permanent memory.
+    - indexedDBRead: To retrieve data from your permanent memory.
+    - indexedDBDelete: To delete data from your permanent memory.
+    - indexedDBKeys: To list all keys available in your permanent memory.
+- **Short-Term Memory (Session only):**
+    - updateScratchpad: To save key-value pairs to your session's scratchpad.
+    - readScratchpad: To read the content of your session's scratchpad.
+- **File System:**
+    - listFiles: To see the files in the current directory.
+    - readFile: To read the content of a specific file.
+    - writeFile: To create a new file or overwrite an existing one.
+- **Web Access:**
+    - duckduckgoSearch: For searching the web for real-time information.
+    - readUrl: To fetch the content of a web page.
+- **Execution & System:**
+    - runJavascript: To execute JavaScript code in a sandboxed environment.
+    - runTerminalCommand: To execute a shell command in a simulated terminal.
+    - updateSystemInstruction: To modify your own core logic when requested by the user.
+
+IMPORTANT:
+- Always respond in the user's original language.
+- Don't ask for permission to use a tool; just use it and announce you're doing so.
+`;
+
+      const listFilesTool = {
+          name: "listFiles",
+          description: "Lists all files in the virtual file system.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {},
+              required: [],
+          }
+      };
+
+      const readFileTool = {
+          name: "readFile",
+          description: "Reads the content of a specific file from the virtual file system.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  fileName: {
+                      type: Type.STRING,
+                      description: "The name of the file to read."
+                  },
+              },
+              required: ["fileName"],
+          }
+      };
+
+      const writeFileTool = {
+          name: "writeFile",
+          description: "Writes content to a specific file in the virtual file system. Creates the file if it doesn't exist, otherwise overwrites it.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  fileName: {
+                      type: Type.STRING,
+                      description: "The name of the file to write to."
+                  },
+                  content: {
+                      type: Type.STRING,
+                      description: "The content to write to the file."
+                  },
+              },
+              required: ["fileName", "content"],
+          }
+      };
+
+      const runJavascriptTool = {
+          name: "runJavascript",
+          description: "Executes a string of JavaScript code in a sandboxed environment and returns the output or error. Supports async operations and top-level await.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  code: {
+                      type: Type.STRING,
+                      description: "The JavaScript code to execute."
+                  },
+              },
+              required: ["code"],
+          }
+      };
+
+      const duckduckgoSearchTool = {
+          name: "duckduckgoSearch",
+          description: "Performs a web search using DuckDuckGo to get real-time information, news, or discover URLs. Returns a list of search results with titles, links, and snippets.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  query: {
+                      type: Type.STRING,
+                      description: "The search query."
+                  },
+              },
+              required: ["query"],
+          }
+      };
+
+      const readUrlTool = {
+          name: "readUrl",
+          description: "Fetches and returns the text content of a given URL. Useful for reading articles or web pages found via web search.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  url: {
+                      type: Type.STRING,
+                      description: "The URL of the page to read."
+                  },
+              },
+              required: ["url"],
+          }
+      };
+
+      const updateSystemInstructionTool = {
+          name: "updateSystemInstruction",
+          description: "Updates your core system instructions. Use this ONLY when the user explicitly asks you to change your behavior, logic, or personality. This is a powerful tool for self-improvement.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  newInstruction: {
+                      type: Type.STRING,
+                      description: "The new, complete system instruction string that will define your behavior going forward."
+                  },
+              },
+              required: ["newInstruction"],
+          }
+      };
+
+      const runTerminalCommandTool = {
+          name: "runTerminalCommand",
+          description: "Executes a shell command in a simulated terminal environment. Supports basic commands like 'ls' (list files), 'cat [fileName]' (read file), 'echo [text]' (print text), and 'pwd' (print working directory).",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  command: {
+                      type: Type.STRING,
+                      description: "The shell command to execute, e.g., 'ls' or 'cat myFile.txt'."
+                  },
+              },
+              required: ["command"],
+          }
+      };
+
+      const updateScratchpadTool = {
+          name: "updateScratchpad",
+          description: "Updates a key-value pair in your short-term memory (scratchpad). Use this to store and recall information within a single session, like file contents, user preferences, or intermediate results. Overwrites existing keys.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  key: {
+                      type: Type.STRING,
+                      description: "The unique key to store the information under."
+                  },
+                  value: {
+                      type: Type.STRING,
+                      description: "The string value to store. Can be simple text or a JSON stringified object."
+                  },
+              },
+              required: ["key", "value"],
+          }
+      };
+
+      const readScratchpadTool = {
+          name: "readScratchpad",
+          description: "Reads the entire content of your short-term memory (scratchpad). Use this to review what you've stored before making your next move.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {},
+              required: [],
+          }
+      };
+
+      const indexedDBWriteTool = {
+          name: "indexedDBWrite",
+          description: "Writes or updates a key-value pair in your long-term, persistent memory (IndexedDB). Use this to remember information across sessions, like user preferences or important data.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  key: {
+                      type: Type.STRING,
+                      description: "The unique key to store the data under."
+                  },
+                  value: {
+                      type: Type.STRING,
+                      description: "The JSON stringified value to store permanently."
+                  },
+              },
+              required: ["key", "value"],
+          }
+      };
+
+      const indexedDBReadTool = {
+          name: "indexedDBRead",
+          description: "Reads a value from your long-term memory (IndexedDB) using its key.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  key: {
+                      type: Type.STRING,
+                      description: "The key of the data to retrieve."
+                  },
+              },
+              required: ["key"],
+          }
+      };
+
+      const indexedDBDeleteTool = {
+          name: "indexedDBDelete",
+          description: "Deletes a key-value pair from your long-term memory (IndexedDB).",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {
+                  key: {
+                      type: Type.STRING,
+                      description: "The key of the data to delete."
+                  },
+              },
+              required: ["key"],
+          }
+      };
+
+      const indexedDBKeysTool = {
+          name: "indexedDBKeys",
+          description: "Lists all the keys currently stored in your long-term memory (IndexedDB), allowing you to know what information you have stored.",
+          parameters: {
+              type: Type.OBJECT,
+              properties: {},
+              required: [],
+          }
+      };
+
+
+      const customTools = [
+          listFilesTool,
+          readFileTool,
+          writeFileTool,
+          runJavascriptTool,
+          readUrlTool,
+          updateSystemInstructionTool,
+          runTerminalCommandTool,
+          updateScratchpadTool,
+          readScratchpadTool,
+          duckduckgoSearchTool,
+          indexedDBWriteTool,
+          indexedDBReadTool,
+          indexedDBDeleteTool,
+          indexedDBKeysTool,
+      ];
+      // --- End of constants.ts ---
+
+      // --- Start of hooks/useLlm.ts ---
+      const useLlm = () => {
+        const DEFAULT_CONFIG = {
+          provider: 'gemini',
+          model: 'gemini-2.5-pro',
+          apiKey: '',
+        };
+
+        const LOCAL_STORAGE_KEY = 'llm_config';
+
+        const [config, setConfig] = useState(() => {
+          try {
+            const storedConfig = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (storedConfig) {
+              return JSON.parse(storedConfig);
+            }
+          } catch (error) {
+            console.error("Failed to parse LLM config from localStorage:", error);
+          }
+          return DEFAULT_CONFIG;
+        });
+
+        useEffect(() => {
+          try {
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(config));
+          } catch (error) {
+            console.error("Failed to save LLM config to localStorage:", error);
+          }
+        }, [config]);
+
+        return {
+          llmConfig: config,
+          setLlmConfig: setConfig,
+        };
+      };
+      // --- End of hooks/useLlm.ts ---
+      
+      // --- Start of hooks/useIndexedDB.ts ---
+      const useIndexedDB = () => {
+        const DB_NAME = 'AgentDB';
+        const STORE_NAME = 'agentStore';
+        const DB_VERSION = 1;
+
+        let db = null;
+
+        const openDB = () => {
+          return new Promise((resolve, reject) => {
+            if (db) {
+              return resolve(db);
+            }
+
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+            request.onerror = (event) => {
+              console.error('IndexedDB error:', request.error);
+              reject('Error opening IndexedDB.');
+            };
+
+            request.onsuccess = (event) => {
+              db = request.result;
+              resolve(db);
+            };
+
+            request.onupgradeneeded = (event) => {
+              const dbInstance = request.result;
+              if (!dbInstance.objectStoreNames.contains(STORE_NAME)) {
+                dbInstance.createObjectStore(STORE_NAME, { keyPath: 'key' });
+              }
+            };
+          });
+        };
+
+        const [data, setData] = useState({});
+        const [error, setError] = useState(null);
+
+        const refreshData = useCallback(async () => {
+          try {
+            const dbInstance = await openDB();
+            const transaction = dbInstance.transaction(STORE_NAME, 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const getAllRequest = store.getAll();
+
+            getAllRequest.onsuccess = () => {
+              const result = {};
+              getAllRequest.result.forEach((item) => {
+                result[item.key] = item.value;
+              });
+              setData(result);
+            };
+
+            getAllRequest.onerror = () => {
+              setError('Could not fetch all data from IndexedDB.');
+            };
+          } catch (err) {
+            setError(err.message);
+          }
+        }, []);
+
+        useEffect(() => {
+          refreshData();
+        }, [refreshData]);
+
+        const writeData = useCallback(async (key, value) => {
+          try {
+            const dbInstance = await openDB();
+            const transaction = dbInstance.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            const request = store.put({ key, value });
+
+            return new Promise((resolve, reject) => {
+              request.onsuccess = () => {
+                refreshData();
+                resolve(`Successfully stored data with key '${key}'.`);
+              };
+              request.onerror = () => {
+                reject(`Error storing data with key '${key}'.`);
+              };
+            });
+          } catch (err) {
+            return Promise.reject(err.message);
+          }
+        }, [refreshData]);
+
+        const readData = useCallback(async (key) => {
+          try {
+              const dbInstance = await openDB();
+              const transaction = dbInstance.transaction(STORE_NAME, 'readonly');
+              const store = transaction.objectStore(STORE_NAME);
+              const request = store.get(key);
+          
+              return new Promise((resolve, reject) => {
+                  request.onsuccess = () => {
+                      if (request.result) {
+                          resolve(JSON.stringify(request.result.value, null, 2));
+                      } else {
+                          resolve(`No data found for key '${key}'.`);
+                      }
+                  };
+                  request.onerror = () => {
+                      reject(`Error reading data for key '${key}'.`);
+                  };
+              });
+          } catch (err) {
+              return Promise.reject(err.message);
+          }
+        }, []);
+
+        const deleteData = useCallback(async (key) => {
+          try {
+              const dbInstance = await openDB();
+              const transaction = dbInstance.transaction(STORE_NAME, 'readwrite');
+              const store = transaction.objectStore(STORE_NAME);
+              const request = store.delete(key);
+
+              return new Promise((resolve, reject) => {
+                  request.onsuccess = () => {
+                      refreshData();
+                      resolve(`Successfully deleted data with key '${key}'.`);
+                  };
+                  request.onerror = () => {
+                      reject(`Error deleting data with key '${key}'.`);
+                  };
+              });
+          } catch (err) {
+              return Promise.reject(err.message);
+          }
+        }, [refreshData]);
+
+        const getAllKeys = useCallback(async () => {
+          try {
+              const dbInstance = await openDB();
+              const transaction = dbInstance.transaction(STORE_NAME, 'readonly');
+              const store = transaction.objectStore(STORE_NAME);
+              const request = store.getAllKeys();
+
+              return new Promise((resolve, reject) => {
+                  request.onsuccess = () => {
+                      const keys = request.result;
+                      if (keys.length === 0) {
+                          resolve("IndexedDB is currently empty.");
+                      } else {
+                          resolve(`Available keys: ${keys.join(', ')}`);
+                      }
+                  };
+                  request.onerror = () => {
+                      reject('Error fetching keys from IndexedDB.');
+                  };
+              });
+          } catch(err) {
+              return Promise.reject(err.message);
+          }
+        }, []);
+
+        const clearDB = useCallback(async () => {
+          try {
+              const dbInstance = await openDB();
+              const transaction = dbInstance.transaction(STORE_NAME, 'readwrite');
+              const store = transaction.objectStore(STORE_NAME);
+              const request = store.clear();
+
+              return new Promise((resolve, reject) => {
+                  request.onsuccess = () => {
+                      refreshData();
+                      resolve();
+                  };
+                  request.onerror = () => {
+                      reject('Error clearing IndexedDB.');
+                  };
+              });
+          } catch(err) {
+              setError(err.message);
+          }
+        }, [refreshData]);
+
+        return { data, error, writeData, readData, deleteData, getAllKeys, clearDB };
+      };
+      // --- End of hooks/useIndexedDB.ts ---
+
+      // --- Start of hooks/useFileSystem.ts ---
+      const useFileSystem = () => {
+        const isApiSupported = !!window.aistudio?.selectDirectory;
+        const [dirHandle, setDirHandle] = useState(null);
+        const [virtualFiles, setVirtualFiles] = useState(new Map());
+        const [files, setFiles] = useState([]);
+        const [error, setError] = useState(null);
+
+        const refreshLocalFileList = useCallback(async (handle) => {
+          const fileList = [];
+          for await (const entry of handle.values()) {
+              if (entry.kind === 'file') {
+                  fileList.push(entry.name);
+              }
+          }
+          setFiles(fileList.sort());
+        }, []);
+
+        useEffect(() => {
+          if (dirHandle) {
+              refreshLocalFileList(dirHandle);
+          } else {
+              setFiles(Array.from(virtualFiles.keys()).sort());
+          }
+        }, [dirHandle, virtualFiles, refreshLocalFileList]);
+
+        const loadFolder = useCallback(async () => {
+          if (!isApiSupported || !window.aistudio) {
+            const message = "This feature is not supported in the current environment.";
+            console.error(message);
+            setError(message);
+            return;
+          }
+          try {
+            const handle = await window.aistudio.selectDirectory();
+            setVirtualFiles(new Map()); // Switch to local mode, clear virtual files
+            setDirHandle(handle);
+            setError(null);
+            // useEffect will refresh the file list
+          } catch (e) {
+            if (e.name !== 'AbortError') {
+              console.error('Error loading folder:', e);
+              const errorMessage = "Could not load folder. Please check permissions.";
+              setError(errorMessage);
+            }
+          }
+        }, [refreshLocalFileList]);
+
+        const listFiles = useCallback(async () => {
+          if (files.length === 0) {
+            return "The file system is empty.";
+          }
+          return `Files available:\n- ${files.join('\n- ')}`;
+        }, [files]);
+
+        const readFile = useCallback(async (fileName) => {
+          if (dirHandle) { // Local mode
+            try {
+              const fileHandle = await dirHandle.getFileHandle(fileName);
+              const file = await fileHandle.getFile();
+              return await file.text();
+            } catch (e) {
+              console.error(`Error reading local file ${fileName}:`, e);
+              return `Error: File not found or could not be read: ${fileName}`;
+            }
+          } else { // Virtual mode
+            if (virtualFiles.has(fileName)) {
+              return virtualFiles.get(fileName);
+            }
+            return `Error: Virtual file not found: ${fileName}`;
+          }
+        }, [dirHandle, virtualFiles]);
+
+        const writeFile = useCallback(async (fileName, content) => {
+          if (dirHandle) { // Local mode
+            try {
+              const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(content);
+              await writable.close();
+              await refreshLocalFileList(dirHandle);
+              return `Successfully wrote to ${fileName}.`;
+            } catch (e) {
+              console.error(`Error writing local file ${fileName}:`, e);
+              return `Error: Could not write to file: ${fileName}. Check permissions.`;
+            }
+          } else { // Virtual mode
+            setVirtualFiles(prev => new Map(prev).set(fileName, content));
+            return `Successfully wrote to virtual file ${fileName}.`;
+          }
+        }, [dirHandle, refreshLocalFileList]);
+
+        return { 
+          files, 
+          listFiles, 
+          readFile, 
+          writeFile, 
+          getFileContent: readFile,
+          loadFolder,
+          isFolderLoaded: !!dirHandle,
+          fsError: error,
+          isApiSupported: isApiSupported,
+        };
+      };
+      // --- End of hooks/useFileSystem.ts ---
+
+      // --- Start of components/Icons.tsx ---
+      const SendIcon = () => (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-5 w-5"
+        >
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      );
+
+      const FileIcon = () => (
+          <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              width="24" height="24" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="h-4 w-4 mr-2 flex-shrink-0">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+      );
+
+      const PlusIcon = () => (
+          <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              width="24" 
+              height="24" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="h-4 w-4 mr-2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+      );
+
+      const BotIcon = () => (
+          <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              width="24" 
+              height="24" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="h-6 w-6">
+              <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+              <circle cx="12" cy="5" r="2"></circle>
+              <path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line>
+              <line x1="16" y1="16" x2="16" y2="16"></line>
+          </svg>
+      );
+
+      const UserIcon = () => (
+          <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              width="24" 
+              height="24" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="h-6 w-6">
+                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+      );
+
+      const ToolIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 mr-2">
+              <path d="M15.5 2.1a2.5 2.5 0 0 0-3.5 0L8.4 5.7a2.5 2.5 0 0 0 0 3.5l6.4 6.4a2.5 2.5 0 0 0 3.5 0l3.6-3.6a2.5 2.5 0 0 0 0-3.5L15.5 2.1z"></path>
+              <path d="m11 5 2 2"></path>
+              <path d="M13.5 17.5 22 9"></path>
+              <path d="m2 22 7.5-7.5"></path>
+          </svg>
+      );
+
+      const PaperclipIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.59a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+      );
+
+      const XIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+      );
+
+      const FolderIcon = () => (
+          <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              width="24" 
+              height="24" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="h-4 w-4 mr-2">
+                  <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"></path>
+          </svg>
+      );
+
+      const SettingsIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+      );
+
+      const ChevronLeftIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5"><path d="m15 18-6-6 6-6"/></svg>
+      );
+
+      const ChevronRightIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5"><path d="m9 18 6-6-6-6"/></svg>
+      );
+
+      const DatabaseIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+          </svg>
+      );
+      // --- End of components/Icons.tsx ---
+
+      // --- Start of components/Message.tsx ---
+      const Message = ({ message }) => {
+        const isAgent = message.author === MessageAuthor.AGENT;
+        const isUser = message.author === MessageAuthor.USER;
+        const isTool = message.author === MessageAuthor.TOOL;
+
+        const authorName = isAgent ? 'Agent' : isUser ? 'You' : 'Tool';
+        const AuthorIcon = isAgent ? BotIcon : isUser ? UserIcon : ToolIcon;
+        const userMessage = message;
+
+        const createMarkup = (text) => {
+          if (message.author === MessageAuthor.USER) {
+            const sanitizedText = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            return { __html: sanitizedText.replace(/\n/g, '<br />') };
+          }
+
+          if (window.marked && window.DOMPurify) {
+            const rawMarkup = window.marked.parse(text, { gfm: true, breaks: true });
+            const sanitizedMarkup = window.DOMPurify.sanitize(rawMarkup);
+            return { __html: sanitizedMarkup };
+          }
+          
+          return { __html: text.replace(/\n/g, '<br />') };
+        };
+
+        return (
+          <div className={`flex items-start gap-3 my-4 ${isUser ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center ${
+                isAgent ? 'bg-indigo-500' : isUser ? 'bg-slate-600' : 'bg-amber-500'
+              }`}>
+              <AuthorIcon />
+            </div>
+            <div className={`w-full max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-indigo-600' : 'bg-slate-700'}`}>
+              <div className="font-bold text-sm mb-2">{authorName}</div>
+              
+              {isUser && userMessage.images && userMessage.images.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  {userMessage.images.map((img, index) => (
+                    <img key={index} src={img} alt={`user upload ${index}`} className="rounded-md object-cover w-full h-auto" />
+                  ))}
+                </div>
+              )}
+
+              {isTool && (
+                  <div className="mb-2">
+                      <p className="text-xs font-mono text-slate-400">
+                          Using tool: <span className="font-bold text-amber-300">{message.toolName}</span>
+                      </p>
+                      <pre className="text-xs font-mono bg-slate-800 p-2 rounded-md mt-1 overflow-x-auto text-slate-300">
+                          {JSON.stringify(message.toolArgs, null, 2)}
+                      </pre>
+                  </div>
+              )}
+
+              {message.text && (
+                <div
+                  className="prose prose-sm prose-invert text-slate-200 max-w-full"
+                  dangerouslySetInnerHTML={createMarkup(message.text)}
+                />
+              )}
+               
+               {isTool && message.toolResult && (
+                  <div className="mt-2 pt-2 border-t border-slate-600">
+                      <p className="text-xs font-mono text-slate-400 mb-1">Tool result:</p>
+                      <pre className="text-xs font-mono bg-slate-800 p-2 rounded-md mt-1 overflow-x-auto text-slate-300">
+                          {message.toolResult}
+                      </pre>
+                  </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+      // --- End of components/Message.tsx ---
+      
+      // --- Start of components/FileExplorer.tsx ---
+      const HelperText = ({ title, children, className = '' }) => (
+          <div className={`flex flex-col items-center justify-center h-full text-center text-slate-400 px-4 ${className}`}>
+              <div className="text-sm">
+                  {title && <h3 className="font-bold text-amber-400 mb-2 text-base">{title}</h3>}
+                  <div className="text-slate-400 leading-relaxed">{children}</div>
+              </div>
+          </div>
+      );
+
+
+      const FileExplorer = ({ 
+        files, 
+        activeFile, 
+        onFileSelect, 
+        onNewFile, 
+        onLoadFolder, 
+        isFolderLoaded,
+        isApiSupported,
+        fsError,
+        onToggleVisibility
+      }) => {
+        
+        const renderContent = () => {
+          if (fsError) {
+              return <HelperText className="text-red-400">{fsError}</HelperText>;
+          }
+          
+          if (files.length > 0) {
+              return (
+                  <ul className="overflow-y-auto -mr-2 pr-2 h-full">
+                    {files.map((file) => (
+                      <li key={file}>
+                        <button
+                          onClick={() => onFileSelect(file)}
+                          className={`w-full text-left flex items-center px-3 py-2 rounded-md transition-colors text-sm ${
+                            activeFile === file
+                              ? 'bg-slate-700 text-slate-100'
+                              : 'text-slate-300 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <FileIcon />
+                          <span className="truncate">{file}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+              );
+          }
+          
+          if (isFolderLoaded) {
+              return <HelperText>The selected folder is empty.</HelperText>;
+          }
+          
+          if (!isApiSupported) {
+              return (
+                  <HelperText title="Virtual Mode">
+                      <p>
+                          Local folder access is not supported.
+                      </p>
+                      <p className="mt-1">
+                          Click "New" to create a temporary file.
+                      </p>
+                  </HelperText>
+              );
+          }
+          
+          return (
+              <HelperText>
+                  <p>Click "Load" to select a folder, or "New" to create a temporary virtual file.</p>
+              </HelperText>
+          );
+        };
+
+        return (
+          <div className="bg-slate-800/50 rounded-lg p-4 flex flex-col h-full">
+            <div className="flex justify-between items-center mb-4 gap-2 flex-shrink-0">
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-bold text-slate-200 truncate">File System</h2>
+              </div>
+              <div className="flex gap-1 items-center flex-shrink-0">
+                {isApiSupported && (
+                   <button
+                    onClick={onLoadFolder}
+                    className="flex items-center px-3 py-1.5 bg-slate-600 text-white rounded-md hover:bg-slate-700 transition-colors text-sm"
+                  >
+                    <FolderIcon />
+                    Load
+                  </button>
+                )}
+                <button
+                  onClick={onNewFile}
+                  className="flex items-center px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm"
+                >
+                  <PlusIcon />
+                  New
+                </button>
+                <button
+                  onClick={onToggleVisibility}
+                  className="p-1.5 text-slate-400 rounded-md hover:bg-slate-700 hover:text-white transition-colors"
+                  title="Hide File Explorer"
+                >
+                  <ChevronLeftIcon />
+                </button>
+              </div>
+            </div>
+            <div className="flex-grow min-h-0 flex flex-col">
+              {renderContent()}
+            </div>
+          </div>
+        );
+      };
+      // --- End of components/FileExplorer.tsx ---
+      
+      // --- Start of components/CodeEditor.tsx ---
+      const CodeEditor = ({ fileName, fileContent, onSave }) => {
+        const [content, setContent] = useState('');
+        const [saveStatus, setSaveStatus] = useState('idle');
+        
+        const debounceTimeout = useRef(null);
+        const statusTimeout = useRef(null);
+
+        useEffect(() => {
+          setContent(fileContent || '');
+          setSaveStatus('idle');
+          if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+          if (statusTimeout.current) clearTimeout(statusTimeout.current);
+        }, [fileName, fileContent]);
+
+        useEffect(() => {
+          if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+          if (statusTimeout.current) clearTimeout(statusTimeout.current);
+          
+          const hasUnsavedChanges = content !== fileContent && fileName !== null;
+
+          if (!hasUnsavedChanges) {
+            if (saveStatus !== 'saved') {
+              setSaveStatus('idle');
+            }
+            return;
+          }
+          
+          setSaveStatus('unsaved');
+
+          debounceTimeout.current = window.setTimeout(async () => {
+            if (fileName) {
+              setSaveStatus('saving');
+              await onSave(fileName, content);
+              setSaveStatus('saved');
+
+              statusTimeout.current = window.setTimeout(() => {
+                setSaveStatus('idle');
+              }, 2000);
+            }
+          }, 1500);
+
+          return () => {
+            if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+            if (statusTimeout.current) clearTimeout(statusTimeout.current);
+          };
+        }, [content, fileName, fileContent, onSave]);
+
+        const handleManualSave = async () => {
+          if (fileName && saveStatus === 'unsaved') {
+            if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+            if (statusTimeout.current) clearTimeout(statusTimeout.current);
+            
+            setSaveStatus('saving');
+            await onSave(fileName, content);
+            setSaveStatus('saved');
+            
+            statusTimeout.current = window.setTimeout(() => {
+              setSaveStatus('idle');
+            }, 2000);
+          }
+        };
+        
+        const renderSaveStatus = () => {
+          switch (saveStatus) {
+            case 'unsaved':
+              return <span className="text-xs text-amber-400">Unsaved</span>;
+            case 'saving':
+              return <span className="text-xs text-slate-400 animate-pulse">Saving...</span>;
+            case 'saved':
+              return <span className="text-xs text-green-400">Saved</span>;
+            default:
+              return <span className="text-xs w-14">&nbsp;</span>; // Placeholder for alignment
+          }
+        };
+
+        if (!fileName) {
+          return (
+            <div className="bg-slate-800/50 rounded-lg p-4 flex flex-col h-full items-center justify-center">
+              <p className="text-slate-400">Select a file to view or edit.</p>
+            </div>
+          );
+        }
+
+        return (
+          <div className="bg-slate-800/50 rounded-lg flex flex-col h-full">
+            <div className="flex justify-between items-center p-3 border-b border-slate-700">
+              <div className="flex items-center font-mono text-sm">
+                <FileIcon />
+                <span className="ml-1 text-slate-200">{fileName}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                {renderSaveStatus()}
+                <button
+                  onClick={handleManualSave}
+                  disabled={saveStatus !== 'unsaved'}
+                  className="px-4 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+            <div className="flex-grow p-1">
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="w-full h-full bg-transparent text-slate-200 font-mono resize-none focus:outline-none p-3 text-sm leading-relaxed"
+                spellCheck="false"
+              />
+            </div>
+          </div>
+        );
+      };
+      // --- End of components/CodeEditor.tsx ---
+      
+      // --- Start of components/SettingsModal.tsx ---
+      const SettingsModal = ({ isOpen, onClose, config, onSave, indexedDbData, onClearIndexedDb }) => {
+        const PREDEFINED_MODELS = {
+            gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+            openai: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+        };
+        const [localConfig, setLocalConfig] = useState(config);
+        const [activeTab, setActiveTab] = useState('provider');
+
+        useEffect(() => {
+          setLocalConfig(config);
+        }, [config, isOpen]);
+
+        const handleSave = () => {
+          onSave(localConfig);
+          onClose();
+        };
+
+        const handleClearStorage = () => {
+          if (window.confirm("Are you sure you want to permanently delete all data in the agent's long-term memory? This cannot be undone.")) {
+              onClearIndexedDb();
+          }
+        }
+
+        if (!isOpen) {
+          return null;
+        }
+        
+        const handleProviderChange = (provider) => {
+          const newConfig = { ...localConfig, provider };
+          // Keep API key if switching between providers that use one
+          // newConfig.apiKey = localConfig.apiKey || ''; 
+
+          switch (provider) {
+              case 'gemini':
+                  newConfig.model = 'gemini-2.5-pro';
+                  break;
+              case 'openai':
+                  newConfig.model = 'gpt-4o';
+                  break;
+              case 'custom':
+                  newConfig.model = 'llama3';
+                  break;
+          }
+          setLocalConfig(newConfig);
+        }
+
+        const renderProviderSettings = () => {
+          const isPredefinedProvider = localConfig.provider === 'gemini' || localConfig.provider === 'openai';
+          return (
+              <React.Fragment>
+                  <div className="mb-6">
+                      <label className="block text-sm font-medium text-slate-300 mb-2">Provider</label>
+                      <div className="flex rounded-md bg-slate-900 p-1 gap-1">
+                          <button
+                              onClick={() => handleProviderChange('gemini')}
+                              className={`w-full px-3 py-1.5 text-sm font-semibold rounded-md transition-colors ${localConfig.provider === 'gemini' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                          >
+                              Gemini
+                          </button>
+                          <button
+                              onClick={() => handleProviderChange('openai')}
+                              className={`w-full px-3 py-1.5 text-sm font-semibold rounded-md transition-colors ${localConfig.provider === 'openai' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                          >
+                              OpenAI
+                          </button>
+                          <button
+                              onClick={() => handleProviderChange('custom')}
+                              className={`w-full px-3 py-1.5 text-sm font-semibold rounded-md transition-colors ${localConfig.provider === 'custom' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                          >
+                              Custom
+                          </button>
+                      </div>
+                  </div>
+
+                  <div className="mb-4">
+                      <label className="block text-sm font-medium text-slate-300 mb-1" htmlFor="model">Model Name</label>
+                      {isPredefinedProvider ? (
+                          <div className="relative">
+                              <select
+                                  id="model"
+                                  value={localConfig.model}
+                                  onChange={(e) => setLocalConfig({ ...localConfig, model: e.target.value })}
+                                  className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none"
+                              >
+                                  {PREDEFINED_MODELS[localConfig.provider].map(modelName => (
+                                      <option key={modelName} value={modelName}>{modelName}</option>
+                                  ))}
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
+                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20" className="w-5 h-5"><path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M6 8l4 4 4-4"></path></svg>
+                              </div>
+                          </div>
+                      ) : (
+                          <input
+                              id="model"
+                              type="text"
+                              value={localConfig.model}
+                              onChange={(e) => setLocalConfig({ ...localConfig, model: e.target.value })}
+                              className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                      )}
+                  </div>
+                  <div className="mb-4">
+                      <label className="block text-sm font-medium text-slate-300 mb-1" htmlFor="apiKey">API Key</label>
+                      <input
+                          id="apiKey"
+                          type="password"
+                          value={localConfig.apiKey || ''}
+                          onChange={(e) => setLocalConfig({ ...localConfig, apiKey: e.target.value })}
+                          className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                       { localConfig.provider === 'gemini' && <p className="text-xs text-slate-400 mt-1">Your Gemini API key will be stored in your browser's local storage.</p>}
+                  </div>
+                   {localConfig.provider === 'custom' && (
+                      <div className="mb-4">
+                          <label className="block text-sm font-medium text-slate-300 mb-1" htmlFor="baseUrl">Base URL (e.g., http://localhost:11434/v1)</label>
+                          <input
+                              id="baseUrl"
+                              type="text"
+                              value={localConfig.baseUrl || ''}
+                              onChange={(e) => setLocalConfig({ ...localConfig, baseUrl: e.target.value })}
+                              className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                      </div>
+                  )}
+              </React.Fragment>
+          )
+        };
+
+        const renderStorageSettings = () => {
+          return (
+              <div>
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-base font-semibold text-slate-200">IndexedDB Storage Contents</h3>
+                      <button
+                          onClick={handleClearStorage}
+                          className="px-3 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-xs font-semibold"
+                      >
+                          Clear All Storage
+                      </button>
+                  </div>
+                  <div className="bg-slate-900 rounded-md p-3 h-64 overflow-y-auto border border-slate-700">
+                      {Object.keys(indexedDbData).length > 0 ? (
+                          <pre className="text-xs text-slate-300 whitespace-pre-wrap break-all">
+                              {JSON.stringify(indexedDbData, null, 2)}
+                          </pre>
+                      ) : (
+                          <div className="flex items-center justify-center h-full text-slate-500">
+                              The agent's long-term memory is empty.
+                          </div>
+                      )}
+                  </div>
+              </div>
+          )
+        };
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl border border-slate-700 flex flex-col" style={{ height: '70vh' }}>
+              <div className="flex justify-between items-center p-4 border-b border-slate-700 flex-shrink-0">
+                <h2 className="text-lg font-bold text-slate-100">Settings</h2>
+                <button onClick={onClose} className="text-slate-400 hover:text-white">
+                  <XIcon />
+                </button>
+              </div>
+
+              <div className="p-6 flex-grow min-h-0 flex flex-col">
+                  <div className="mb-6 border-b border-slate-700 flex-shrink-0">
+                      <div className="flex space-x-4">
+                          <button 
+                              onClick={() => setActiveTab('provider')}
+                              className={`pb-2 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'provider' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+                          >
+                              LLM Provider
+                          </button>
+                          <button 
+                              onClick={() => setActiveTab('storage')}
+                              className={`pb-2 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'storage' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+                          >
+                              Agent Storage
+                          </button>
+                      </div>
+                  </div>
+
+                  <div className="flex-grow min-h-0 overflow-y-auto pr-2 -mr-2">
+                      {activeTab === 'provider' && renderProviderSettings()}
+                      {activeTab === 'storage' && renderStorageSettings()}
+                  </div>
+              </div>
+
+              <div className="flex justify-end p-4 bg-slate-800/50 border-t border-slate-700 rounded-b-lg flex-shrink-0">
+                  <button
+                    onClick={handleSave}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm font-semibold"
+                  >
+                    Save and Close
+                  </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+      // --- End of components/SettingsModal.tsx ---
+      
+      // --- Start of components/ChatInterface.tsx ---
+      const ChatInterface = ({ messages, onSendMessage, isLoading, agentActivity, commandHistory, onSettingsClick, isChatDisabled }) => {
+        const [input, setInput] = useState('');
+        const [images, setImages] = useState([]);
+        const [historyIndex, setHistoryIndex] = useState(0);
+        const messagesEndRef = useRef(null);
+        const textareaRef = useRef(null);
+        const fileInputRef = useRef(null);
+
+        useEffect(() => {
+          setHistoryIndex(commandHistory.length);
+        }, [commandHistory.length]);
+
+        const scrollToBottom = () => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        };
+
+        useEffect(() => {
+          scrollToBottom();
+        }, [messages, isLoading]);
+
+        useLayoutEffect(() => {
+          const textarea = textareaRef.current;
+          if (textarea) {
+            const maxHeight = 200; // pixels
+            textarea.style.height = 'auto'; // Reset height to recalculate
+            const scrollHeight = textarea.scrollHeight;
+
+            if (scrollHeight > maxHeight) {
+              textarea.style.height = `${maxHeight}px`;
+              textarea.style.overflowY = 'auto';
+            } else {
+              textarea.style.height = `${scrollHeight}px`;
+              textarea.style.overflowY = 'hidden';
+            }
+          }
+        }, [input]);
+
+        const sendMessage = () => {
+          if ((input.trim() || images.length > 0) && !isLoading && !isChatDisabled) {
+            onSendMessage({ text: input.trim(), images });
+            setInput('');
+            setImages([]);
+          }
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          sendMessage();
+        };
+
+        const handleFileChange = (e) => {
+          if (e.target.files) {
+            const files = Array.from(e.target.files);
+            const imagePromises = files.map((file) => {
+              return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+              });
+            });
+            Promise.all(imagePromises).then(base64Images => {
+              setImages(prev => [...prev, ...base64Images]);
+            });
+          }
+        };
+
+        const removeImage = (index) => {
+          setImages(prev => prev.filter((_, i) => i !== index));
+        };
+        
+        const handleKeyDown = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+            return;
+          }
+
+          const isCursorAtStart = e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
+          const isCursorAtEnd = e.currentTarget.selectionStart === input.length && e.currentTarget.selectionEnd === input.length;
+          const hasMultipleLines = input.includes('\n');
+
+          if (commandHistory.length > 0 && images.length === 0) {
+            if (e.key === 'ArrowUp' && (!hasMultipleLines || isCursorAtStart)) {
+              e.preventDefault();
+              const newIndex = Math.max(0, historyIndex - 1);
+              setHistoryIndex(newIndex);
+              setInput(commandHistory[newIndex] || '');
+            } else if (e.key === 'ArrowDown' && (!hasMultipleLines || isCursorAtEnd)) {
+              e.preventDefault();
+              const newIndex = Math.min(commandHistory.length, historyIndex + 1);
+              setHistoryIndex(newIndex);
+              setInput(commandHistory[newIndex] ?? '');
+            }
+          }
+        };
+        
+        const placeholderText = isChatDisabled 
+          ? "Chat is disabled. Please configure your Gemini API key in settings."
+          : "Ask the agent to do something...";
+
+
+        return (
+          <div className="bg-slate-800/50 rounded-lg flex flex-col h-full">
+            <div className="flex justify-between items-center p-3 border-b border-slate-700 flex-shrink-0">
+              <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+                  <BotIcon />
+                  <span>AI Agent</span>
+              </h2>
+              <div className="flex items-center gap-2">
+                  <button onClick={onSettingsClick} className="text-slate-400 hover:text-white transition-colors" title="Settings">
+                      <SettingsIcon />
+                  </button>
+              </div>
+            </div>
+            <div className="flex-grow p-4 overflow-y-auto">
+              {messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                   <BotIcon />
+                  <h1 className="text-2xl font-bold mt-4">Gemini AI Agent</h1>
+                  <p className="mt-2 text-center">I can write code, search the web, and manage files. What can I help you with?</p>
+                </div>
+              )}
+              {messages.map((msg) => (
+                <Message key={msg.id} message={msg} />
+              ))}
+              {isLoading && (
+                  <div className="flex items-start gap-3 my-4">
+                    <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center bg-indigo-500">
+                      <BotIcon />
+                    </div>
+                    <div className="w-full max-w-[80%] rounded-lg p-3 bg-slate-700 flex items-center">
+                       {agentActivity ? (
+                          <p className="text-sm text-slate-300 animate-pulse">{agentActivity}</p>
+                       ) : (
+                          <React.Fragment>
+                              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse mr-2"></div>
+                              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse mr-2 delay-150"></div>
+                              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse delay-300"></div>
+                          </React.Fragment>
+                       )}
+                    </div>
+                  </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+            <div className="p-4 border-t border-slate-700">
+              {isChatDisabled && (
+                <div className="text-center text-xs text-amber-400 mb-2 p-2 bg-amber-500/10 rounded-md">
+                  Chat is disabled. Please open settings and provide your API key for the Gemini provider.
+                </div>
+              )}
+              <div className="bg-slate-700 rounded-xl border border-transparent focus-within:border-indigo-500 transition-colors">
+                  {images.length > 0 && (
+                      <div className="p-2 grid grid-cols-4 gap-2 border-b border-slate-600">
+                          {images.map((img, index) => (
+                              <div key={index} className="relative group">
+                                  <img src={img} alt={`preview ${index}`} className="w-full h-16 object-cover rounded-md"/>
+                                  <button 
+                                      onClick={() => removeImage(index)}
+                                      className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                      <XIcon />
+                                  </button>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+                  <form onSubmit={handleSubmit} className="relative flex items-end gap-2 p-3">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-slate-400 hover:text-indigo-400 transition-colors"
+                    disabled={isChatDisabled}
+                  >
+                    <PaperclipIcon />
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      className="hidden" 
+                      multiple 
+                      accept="image/*" 
+                      onChange={handleFileChange}
+                    />
+                  </button>
+                  <textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={placeholderText}
+                      className="flex-grow bg-transparent resize-none focus:outline-none text-slate-100 placeholder-slate-400 text-sm px-1"
+                      rows={1}
+                  />
+                  <button
+                      type="submit"
+                      disabled={isLoading || (!input.trim() && images.length === 0) || isChatDisabled}
+                      className="bg-indigo-600 rounded-full h-8 w-8 flex items-center justify-center text-white flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors"
+                  >
+                      <SendIcon />
+                  </button>
+                  </form>
+              </div>
+            </div>
+          </div>
+        );
+      };
+      // --- End of components/ChatInterface.tsx ---
+      
+      // --- Start of App.tsx ---
+      const Resizer = ({ onMouseDown }) => (
+          <div
+              onMouseDown={onMouseDown}
+              className="flex-shrink-0 w-2 h-full cursor-col-resize bg-slate-800 hover:bg-indigo-600 transition-colors rounded mx-1"
+          />
+      );
+
+      const dataUrlToToolPart = (dataUrl) => {
+          const [header, base64Data] = dataUrl.split(',');
+          const mimeType = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
+          return { inlineData: { mimeType, data: base64Data } };
+      };
+
+
+      const App = () => {
+          const [messages, setMessages] = useState([]);
+          const [isLoading, setIsLoading] = useState(false);
+          const [agentActivity, setAgentActivity] = useState(null);
+          const [activeFile, setActiveFile] = useState(null);
+          const [editorContent, setEditorContent] = useState('');
+          const [commandHistory, setCommandHistory] = useState([]);
+          const [panelSizes, setPanelSizes] = useState([25, 50, 25]);
+          const [draggingIndex, setDraggingIndex] = useState(null);
+          const [systemInstruction, setSystemInstruction] = useState(SYSTEM_INSTRUCTION);
+          const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+          const [isFileExplorerVisible, setIsFileExplorerVisible] = useState(true);
+          const [scratchpad, setScratchpad] = useState({});
+          const containerRef = useRef(null);
+          
+          const { llmConfig, setLlmConfig } = useLlm();
+          const { data: indexedDbData, writeData, readData, deleteData, getAllKeys, clearDB } = useIndexedDB();
+
+          const { 
+              files, 
+              listFiles, 
+              readFile, 
+              writeFile, 
+              getFileContent,
+              loadFolder,
+              isFolderLoaded,
+              fsError,
+              isApiSupported,
+          } = useFileSystem();
+
+          const chatRef = useRef(null);
+
+          const toggleFileExplorerVisibility = () => {
+              setIsFileExplorerVisible(prev => !prev);
+          };
+
+          useEffect(() => {
+              if (llmConfig.provider !== 'gemini' || !llmConfig.apiKey) {
+                  chatRef.current = null;
+                  console.log("Chat not initialized: provider is not 'gemini' or API key is missing.");
+                  return;
+              }
+
+              try {
+                  const ai = new GoogleGenAI({ apiKey: llmConfig.apiKey });
+                  
+                  chatRef.current = ai.chats.create({
+                      model: llmConfig.model,
+                      config: {
+                          systemInstruction: systemInstruction,
+                          tools: [{ functionDeclarations: customTools }],
+                      },
+                  });
+                  console.log(`Chat initialized with model: ${llmConfig.model}`);
+              } catch(e) {
+                  console.error("Failed to initialize Gemini AI:", e);
+                  chatRef.current = null;
+                  setMessages(prev => [...prev.filter(m => m.id !== 'init-error'), {
+                      id: 'init-error',
+                      author: MessageAuthor.AGENT,
+                      text: `Failed to initialize Gemini. Please check your API key in settings. Error: ${e.message}`,
+                  }]);
+              }
+          }, [systemInstruction, llmConfig]);
+
+          useEffect(() => {
+              const handleMouseMove = (e) => {
+                  if (draggingIndex === null || !containerRef.current) return;
+                  
+                  const containerWidth = containerRef.current.offsetWidth;
+                  const minPanelPixels = 200;
+                  
+                  const newSizes = [...panelSizes];
+                  const leftPanelIndex = draggingIndex;
+                  const rightPanelIndex = draggingIndex + 1;
+
+                  const leftPanel = containerRef.current.children[leftPanelIndex * 2];
+                  const rightPanel = containerRef.current.children[rightPanelIndex * 2];
+
+                  if (!leftPanel || !rightPanel) return;
+
+                  const combinedWidth = leftPanel.clientWidth + rightPanel.clientWidth;
+                  let newLeftWidth = e.clientX - leftPanel.getBoundingClientRect().left;
+
+                  newLeftWidth = Math.max(minPanelPixels, Math.min(newLeftWidth, combinedWidth - minPanelPixels));
+                  
+                  const newLeftSize = (newLeftWidth / containerWidth) * 100;
+                  const combinedSize = panelSizes[leftPanelIndex] + panelSizes[rightPanelIndex];
+                  const newRightSize = combinedSize - newLeftSize;
+
+                  newSizes[leftPanelIndex] = newLeftSize;
+                  newSizes[rightPanelIndex] = newRightSize;
+          
+                  setPanelSizes(newSizes);
+              };
+          
+              const handleMouseUp = () => {
+                  setDraggingIndex(null);
+                  document.body.style.userSelect = '';
+              };
+          
+              if (draggingIndex !== null) {
+                  window.addEventListener('mousemove', handleMouseMove);
+                  window.addEventListener('mouseup', handleMouseUp);
+                  document.body.style.userSelect = 'none';
+              }
+          
+              return () => {
+                  window.removeEventListener('mousemove', handleMouseMove);
+                  window.removeEventListener('mouseup', handleMouseUp);
+              };
+          }, [draggingIndex, panelSizes]);
+
+          const handleMouseDown = (index) => {
+              setDraggingIndex(index);
+          };
+
+          const runJavascript = async (code) => {
+              const asyncWrapper = `
+                  return (async () => {
+                      try {
+                          ${code}
+                      } catch (e) {
+                          throw e;
+                      }
+                  })();
+              `;
+
+              try {
+                  const result = await new Function(asyncWrapper)();
+                  
+                  if (result === undefined) {
+                      return 'Execution successful, returned undefined.';
+                  }
+                  if (typeof result === 'object' || Array.isArray(result)) {
+                      return JSON.stringify(result, null, 2);
+                  }
+                  return String(result);
+              } catch (e) {
+                  const error = e;
+                  console.error("Error executing JS code:", error);
+                  return `Error: ${error.message}\nStack: ${error.stack || 'Not available'}`;
+              }
+          };
+          
+          const readUrl = async (url) => {
+              try {
+                  setAgentActivity(`Reading content from ${url}...`);
+                  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+                  const response = await fetch(proxyUrl);
+                  
+                  if (!response.ok) {
+                      return `Error: Failed to fetch URL. Server responded with status ${response.status}. The website might be down or blocking access.`;
+                  }
+          
+                  const htmlContent = await response.text();
+                  
+                  const parser = new DOMParser();
+                  const doc = parser.parseFromString(htmlContent, 'text/html');
+                  
+                  doc.querySelectorAll('script, style').forEach(el => el.remove());
+                  
+                  let mainContent = doc.body.textContent || '';
+          
+                  mainContent = mainContent.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/\\s\\s+/g, ' ').trim();
+                  
+                  if (!mainContent) {
+                      return `Error: Could not extract any readable content from the URL. It might be a video, an image, or a page that relies heavily on JavaScript.`;
+                  }
+                  
+                  const summary = mainContent.substring(0, 4000) + (mainContent.length > 4000 ? '...' : '');
+                  return `Successfully extracted content from ${url}:\n\n${summary}`;
+          
+              } catch (e) {
+                  const error = e;
+                  console.error(`Error fetching URL ${url}:`, error);
+                  return `Error: An exception occurred while trying to fetch the URL content. Message: ${error.message}`;
+              }
+          };
+
+          const duckduckgoSearch = async (query) => {
+              try {
+                  setAgentActivity(`Searching for: ${query}...`);
+                  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+                  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
+                  const response = await fetch(proxyUrl);
+
+                  if (!response.ok) {
+                      return `Error: Search failed. Server responded with status ${response.status}.`;
+                  }
+                  const htmlContent = await response.text();
+                  const parser = new DOMParser();
+                  const doc = parser.parseFromString(htmlContent, 'text/html');
+                  const results = Array.from(doc.querySelectorAll('.result')).slice(0, 5);
+
+                  if (results.length === 0) {
+                      return "No search results found for that query.";
+                  }
+
+                  const searchResults = results.map(result => {
+                      const titleElement = result.querySelector('.result__title a');
+                      const snippetElement = result.querySelector('.result__snippet');
+                      const title = titleElement?.textContent?.trim() || 'No title';
+                      const link = titleElement?.href || 'No link';
+                      const snippet = snippetElement?.textContent?.trim() || 'No snippet';
+                      return `Title: ${title}\nURL: ${link}\nSnippet: ${snippet}`;
+                  });
+
+                  return `Search results for "${query}":\n\n${searchResults.join('\n\n---\n\n')}`;
+              } catch (e) {
+                  const error = e;
+                  console.error(`Error during DuckDuckGo search for "${query}":`, error);
+                  return `Error: An exception occurred while trying to perform the search. Message: ${error.message}`;
+              }
+          };
+
+          const runTerminalCommand = async (command) => {
+              const args = command.trim().split(/\\s+/);
+              const cmd = args[0];
+
+              switch (cmd) {
+                  case 'ls':
+                      return listFiles();
+                  case 'cat':
+                      if (args.length < 2) {
+                          return "Error: 'cat' command requires a file name.";
+                      }
+                      return readFile(args[1]);
+                  case 'echo':
+                      return args.slice(1).join(' ');
+                  case 'pwd':
+                      return `Current directory: ${isFolderLoaded ? '/' : '(virtual)'}`;
+                  default:
+                      return `Error: command not found: ${cmd}. Supported commands are: ls, cat, echo, pwd.`;
+              }
+          };
+
+          const handleFileSelect = async (fileName) => {
+              setActiveFile(fileName);
+              try {
+                  const content = await getFileContent(fileName);
+                  setEditorContent(content);
+              } catch (e) {
+                  console.error("Error reading file content:", e);
+                  setEditorContent("Error: could not read this file.");
+              }
+          };
+          
+          const handleSaveFile = async (fileName, content) => {
+              await writeFile(fileName, content);
+              if (activeFile === fileName) {
+                  setEditorContent(content);
+              }
+          };
+
+          const handleNewFile = async () => {
+              const fileName = prompt("Enter new file name:");
+              if (fileName && !files.includes(fileName)) {
+                  await writeFile(fileName, '');
+                  setActiveFile(fileName);
+                  setEditorContent('');
+              } else if (fileName) {
+                  alert("A file with the same name already exists.");
+              }
+          };
+          
+          const updateSystemInstruction = async (newInstruction) => {
+              setSystemInstruction(newInstruction);
+              return "System instruction updated. Chat has been re-initialized with the new logic.";
+          };
+
+          const updateScratchpad = async (key, value) => {
+              setScratchpad(prev => ({ ...prev, [key]: value }));
+              return `Successfully updated scratchpad with key '${key}'.`;
+          };
+          
+          const readScratchpad = async () => {
+              if (Object.keys(scratchpad).length === 0) {
+                  return "Your scratchpad is currently empty.";
+              }
+              return JSON.stringify(scratchpad, null, 2);
+          };
+
+          const indexedDBWrite = async (key, value) => {
+              try {
+                  let parsedValue;
+                  try {
+                      parsedValue = JSON.parse(value);
+                  } catch {
+                      parsedValue = value;
+                  }
+                  return await writeData(key, parsedValue);
+              } catch (e) {
+                  return `Error writing to IndexedDB: ${e.message}`;
+              }
+          };
+
+          const executeTool = async (name, args) => {
+              switch (name) {
+                  case 'listFiles':
+                      return await listFiles();
+                  case 'readFile':
+                      return await readFile(args.fileName);
+                  case 'writeFile':
+                      const result = await writeFile(args.fileName, args.content);
+                      if(activeFile === args.fileName) {
+                          setEditorContent(args.content);
+                      }
+                      return result;
+                  case 'runJavascript':
+                      return await runJavascript(args.code);
+                  case 'runTerminalCommand':
+                      return await runTerminalCommand(args.command);
+                  case 'readUrl':
+                      return await readUrl(args.url);
+                  case 'duckduckgoSearch':
+                      return await duckduckgoSearch(args.query);
+                  case 'updateSystemInstruction':
+                      return await updateSystemInstruction(args.newInstruction);
+                  case 'updateScratchpad':
+                      return await updateScratchpad(args.key, args.value);
+                  case 'readScratchpad':
+                      return await readScratchpad();
+                  case 'indexedDBWrite':
+                      return await indexedDBWrite(args.key, args.value);
+                  case 'indexedDBRead':
+                      return await readData(args.key);
+                  case 'indexedDBDelete':
+                      return await deleteData(args.key);
+                  case 'indexedDBKeys':
+                      return await getAllKeys();
+                  default:
+                      return `Unknown tool: ${name}`;
+              }
+          }
+
+          const handleSendMessage = (payload) => {
+              if (!chatRef.current) {
+                  const errorMessage = { id: Date.now().toString() + '-error', author: MessageAuthor.AGENT, text: "Error: Chat is not initialized. Please ensure your API key is set correctly in settings." };
+                  setMessages(prev => [...prev, errorMessage]);
+                  setIsLoading(false);
+                  return;
+              }
+
+              if (payload.text) {
+                setCommandHistory(prev => [...prev, payload.text]);
+              }
+
+              setIsLoading(true);
+              setAgentActivity('Thinking...');
+              const userMessage = { 
+                  id: Date.now().toString(), 
+                  author: MessageAuthor.USER, 
+                  text: payload.text, 
+                  images: payload.images 
+              };
+              setMessages(prev => [...prev, userMessage]);
+
+              setTimeout(() => {
+                  const processRequest = async () => {
+                      try {
+                          console.groupCollapsed(`Processing user input: "${payload.text}"`);
+                          console.log("Current chat history:", messages);
+                          if (!chatRef.current) throw new Error("Chat not initialized");
+
+                          const messageParts = [];
+                          if (payload.text) {
+                              messageParts.push({ text: payload.text });
+                          }
+                          if (payload.images) {
+                              for (const image of payload.images) {
+                                  messageParts.push(dataUrlToToolPart(image));
+                              }
+                          }
+
+                          let currentResponse = await chatRef.current.sendMessage({ message: messageParts });
+
+                          while (true) {
+                              const functionCalls = currentResponse.functionCalls;
+                              if (!functionCalls || functionCalls.length === 0) {
+                                  console.log("Model returned final text, no tool calls.");
+                                  break;
+                              }
+                              
+                              console.log("Model requested tool calls:", functionCalls);
+
+                              const toolMessages = functionCalls.map(call => ({
+                                  id: `${Date.now()}-${call.name}-${Math.random()}`,
+                                  author: MessageAuthor.TOOL,
+                                  text: `Executing tool ${call.name}...`,
+                                  toolName: call.name,
+                                  toolArgs: call.args
+                              }));
+                              setMessages(prev => [...prev, ...toolMessages]);
+                              setAgentActivity(`Executing ${functionCalls.length} tool(s) in parallel...`);
+
+                              const toolPromises = functionCalls.map(call => {
+                                  console.log(`Executing custom tool (in parallel): ${call.name}`, call.args);
+                                  return executeTool(call.name, call.args);
+                              });
+
+                              const toolResults = await Promise.all(toolPromises);
+                              
+                              setMessages(prev => {
+                                  const newMessages = [...prev];
+                                  toolResults.forEach((result, index) => {
+                                      const messageIdToUpdate = toolMessages[index].id;
+                                      const messageIndex = newMessages.findIndex(msg => msg.id === messageIdToUpdate);
+                                      if (messageIndex !== -1) {
+                                          newMessages[messageIndex].toolResult = result;
+                                          newMessages[messageIndex].text = `Tool ${functionCalls[index].name} executed.`;
+                                      }
+                                  });
+                                  return newMessages;
+                              });
+
+                              const functionResponseParts = functionCalls.map((call, index) => {
+                                  const result = toolResults[index];
+                                  console.log(`Tool ${call.name} result:`, result);
+                                  return {
+                                      functionResponse: { name: call.name, response: { result } },
+                                  };
+                              });
+
+                              setAgentActivity('Processing tool results...');
+                              console.log("Sending tool responses back to model:", functionResponseParts);
+                              currentResponse = await chatRef.current.sendMessage({ message: functionResponseParts });
+                          }
+
+                          const finalText = currentResponse?.text ?? "Sorry, I could not process that request.";
+                          console.log("Final agent response:", finalText);
+                          const agentMessage = { id: Date.now().toString() + '-agent', author: MessageAuthor.AGENT, text: finalText };
+                          setMessages(prev => [...prev, agentMessage]);
+
+                      } catch (error) {
+                          console.error("Error during conversation:", error);
+                          console.groupCollapsed("Error details");
+                          console.log("Last user input:", payload);
+                          console.log("Chat history at time of error:", messages);
+                          console.error("Original error object:", error);
+                          console.groupEnd();
+
+                          const errorMessage = { id: Date.now().toString() + '-error', author: MessageAuthor.AGENT, text: "An error occurred. Please check the developer console for details." };
+                          setMessages(prev => [...prev, errorMessage]);
+                      } finally {
+                          setIsLoading(false);
+                          setAgentActivity(null);
+                          console.groupEnd();
+                      }
+                  };
+                  processRequest();
+              }, 0);
+          };
+
+          return (
+              <div className="h-screen w-screen p-4 flex bg-slate-900 font-sans">
+                  <SettingsModal 
+                      isOpen={isSettingsOpen}
+                      onClose={() => setIsSettingsOpen(false)}
+                      config={llmConfig}
+                      onSave={setLlmConfig}
+                      indexedDbData={indexedDbData}
+                      onClearIndexedDb={clearDB}
+                  />
+                  {!isFileExplorerVisible && (
+                      <button
+                          onClick={toggleFileExplorerVisibility}
+                          className="absolute top-1/2 left-0 -translate-y-1/2 z-10 bg-slate-800 h-32 w-6 rounded-r-lg flex items-center justify-center text-slate-400 hover:bg-indigo-600 hover:text-white transition-colors"
+                          title="Show File Explorer"
+                      >
+                          <ChevronRightIcon />
+                      </button>
+                  )}
+                  <div className="flex w-full min-w-0" ref={containerRef}>
+                      {isFileExplorerVisible && (
+                          <React.Fragment>
+                              <div style={{ flex: `1 1 ${panelSizes[0]}%` }} className="h-full min-w-0">
+                                  <FileExplorer 
+                                      files={files} 
+                                      activeFile={activeFile} 
+                                      onFileSelect={handleFileSelect} 
+                                      onNewFile={handleNewFile}
+                                      onLoadFolder={loadFolder}
+                                      isFolderLoaded={isFolderLoaded}
+                                      isApiSupported={isApiSupported}
+                                      fsError={fsError}
+                                      onToggleVisibility={toggleFileExplorerVisibility}
+                                  />
+                              </div>
+                              <Resizer onMouseDown={() => handleMouseDown(0)} />
+                          </React.Fragment>
+                      )}
+                      <div style={{ flex: `1 1 ${panelSizes[1]}%` }} className="h-full min-w-0">
+                          <CodeEditor fileName={activeFile} fileContent={editorContent} onSave={handleSaveFile} />
+                      </div>
+                      <Resizer onMouseDown={() => handleMouseDown(1)} />
+                      <div style={{ flex: `1 1 ${panelSizes[2]}%` }} className="h-full min-w-0">
+                          <ChatInterface 
+                              messages={messages} 
+                              onSendMessage={handleSendMessage} 
+                              isLoading={isLoading} 
+                              agentActivity={agentActivity} 
+                              commandHistory={commandHistory}
+                              onSettingsClick={() => setIsSettingsOpen(true)}
+                              isChatDisabled={llmConfig.provider !== 'gemini' || !llmConfig.apiKey}
+                          />
+                      </div>
+                  </div>
+              </div>
+          );
+      };
+      // --- End of App.tsx ---
+
+      // --- Start of index.tsx ---
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+      // --- End of index.tsx ---
+    </script>
   </body>
 </html>
